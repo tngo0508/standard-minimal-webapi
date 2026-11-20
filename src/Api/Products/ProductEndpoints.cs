@@ -11,13 +11,7 @@ public record ProductRequest(
     [property: Range(0, 1_000_000)] decimal Price,
     int? CategoryId = null);
 
-public record ProductResponse(
-    int Id,
-    string Name,
-    decimal Price,
-    DateTimeOffset CreatedAt,
-    int? CategoryId,
-    string? CategoryName);
+public record ProductResponse(int Id, string Name, decimal Price, int? CategoryId, string? CategoryName);
 
 public static class ProductEndpoints
 {
@@ -39,18 +33,19 @@ public static class ProductEndpoints
     private static async Task<Ok<List<ProductResponse>>> GetAll(
         AppDbContext db, CancellationToken ct, int? categoryId = null)
     {
-        var query = db.Products.AsNoTracking();
+        IQueryable<Product> query = db.Products;
 
         if (categoryId is not null)
         {
             query = query.Where(p => p.CategoryId == categoryId);
         }
 
-        // Projecting through the navigation makes EF emit a LEFT JOIN to Categories.
+        // Selecting only the needed columns, and reaching through the Category navigation,
+        // makes EF Core emit one SELECT with a LEFT JOIN to Categories.
         var products = await query
             .OrderBy(p => p.Id)
             .Select(p => new ProductResponse(
-                p.Id, p.Name, p.Price, p.CreatedAt, p.CategoryId, p.Category != null ? p.Category.Name : null))
+                p.Id, p.Name, p.Price, p.CategoryId, p.Category != null ? p.Category.Name : null))
             .ToListAsync(ct);
 
         return TypedResults.Ok(products);
@@ -140,5 +135,5 @@ public static class ProductEndpoints
     }
 
     private static ProductResponse ToResponse(Product p) =>
-        new(p.Id, p.Name, p.Price, p.CreatedAt, p.CategoryId, p.Category?.Name);
+        new(p.Id, p.Name, p.Price, p.CategoryId, p.Category?.Name);
 }

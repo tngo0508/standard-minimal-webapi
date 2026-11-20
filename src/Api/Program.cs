@@ -2,10 +2,8 @@
 using Api.Auth;
 using Api.Categories;
 using Api.Data;
-using Api.Entities;
 using Api.Products;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -13,16 +11,23 @@ using Microsoft.IdentityModel.Tokens;
 var builder = WebApplication.CreateBuilder(args);
 
 // --- Database -------------------------------------------------------------
+// Only business data (Categories, Products) lives here. Nothing about users or tokens is stored.
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
 
-// --- JWT ------------------------------------------------------------------
-// Fail at startup, not on the first request, if the Jwt section is incomplete.
+// --- Settings -------------------------------------------------------------
+// Fail at startup, not on the first request, if a section is incomplete.
 builder.Services.AddOptions<JwtOptions>()
     .BindConfiguration(JwtOptions.SectionName)
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddOptions<ApiClientOptions>()
+    .BindConfiguration(ApiClientOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+// --- JWT ------------------------------------------------------------------
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
 
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
@@ -30,7 +35,7 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
     {
         var jwt = jwtOptions.Value;
 
-        // Keep claim names as they appear in the token ("sub", "email").
+        // Keep claim names as they appear in the token ("sub").
         bearer.MapInboundClaims = false;
         bearer.TokenValidationParameters = new TokenValidationParameters
         {
@@ -49,7 +54,6 @@ builder.Services.AddAuthorization();
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TokenService>();
-builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 
 // --- API plumbing ---------------------------------------------------------
 builder.Services.AddProblemDetails();

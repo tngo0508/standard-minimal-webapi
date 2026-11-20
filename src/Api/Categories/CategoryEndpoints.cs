@@ -8,12 +8,13 @@ namespace Api.Categories;
 
 public record CategoryRequest([property: Required, MaxLength(100)] string Name);
 
-public record CategoryResponse(int Id, string Name, DateTimeOffset CreatedAt);
+public record CategoryResponse(int Id, string Name);
 
 public static class CategoryEndpoints
 {
     public static IEndpointRouteBuilder MapCategoryEndpoints(this IEndpointRouteBuilder app)
     {
+        // Every endpoint in this group requires a valid bearer token.
         var group = app.MapGroup("/categories").WithTags("Categories").RequireAuthorization();
 
         group.MapGet("/", GetAll);
@@ -28,9 +29,8 @@ public static class CategoryEndpoints
     private static async Task<Ok<List<CategoryResponse>>> GetAll(AppDbContext db, CancellationToken ct)
     {
         var categories = await db.Categories
-            .AsNoTracking()
             .OrderBy(c => c.Name)
-            .Select(c => new CategoryResponse(c.Id, c.Name, c.CreatedAt))
+            .Select(c => new CategoryResponse(c.Id, c.Name))
             .ToListAsync(ct);
 
         return TypedResults.Ok(categories);
@@ -39,8 +39,12 @@ public static class CategoryEndpoints
     private static async Task<Results<Ok<CategoryResponse>, NotFound>> GetById(
         int id, AppDbContext db, CancellationToken ct)
     {
-        var category = await db.Categories.AsNoTracking().SingleOrDefaultAsync(c => c.Id == id, ct);
-        return category is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(category));
+        var category = await db.Categories
+            .Where(c => c.Id == id)
+            .Select(c => new CategoryResponse(c.Id, c.Name))
+            .SingleOrDefaultAsync(ct);
+
+        return category is null ? TypedResults.NotFound() : TypedResults.Ok(category);
     }
 
     private static async Task<Results<CreatedAtRoute<CategoryResponse>, ProblemHttpResult>> Create(
@@ -57,7 +61,8 @@ public static class CategoryEndpoints
         db.Categories.Add(category);
         await db.SaveChangesAsync(ct);
 
-        return TypedResults.CreatedAtRoute(ToResponse(category), "GetCategoryById", new { id = category.Id });
+        return TypedResults.CreatedAtRoute(
+            new CategoryResponse(category.Id, category.Name), "GetCategoryById", new { id = category.Id });
     }
 
     private static async Task<Results<Ok<CategoryResponse>, NotFound, ProblemHttpResult>> Update(
@@ -79,7 +84,7 @@ public static class CategoryEndpoints
         category.Name = name;
         await db.SaveChangesAsync(ct);
 
-        return TypedResults.Ok(ToResponse(category));
+        return TypedResults.Ok(new CategoryResponse(category.Id, category.Name));
     }
 
     private static async Task<Results<NoContent, NotFound>> Delete(int id, AppDbContext db, CancellationToken ct)
@@ -93,6 +98,4 @@ public static class CategoryEndpoints
         TypedResults.Problem(
             statusCode: StatusCodes.Status409Conflict,
             title: "A category with this name already exists.");
-
-    private static CategoryResponse ToResponse(Category c) => new(c.Id, c.Name, c.CreatedAt);
 }

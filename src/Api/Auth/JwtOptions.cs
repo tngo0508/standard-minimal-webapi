@@ -22,8 +22,5 @@ public class JwtOptions
     public string Key { get; set; } = string.Empty;
 
     [Range(1, 1440)]
-    public int ExpiryMinutes { get; set; } = 15;
-
-    [Range(1, 365)]
-    public int RefreshTokenDays { get; set; } = 14;
+    public int ExpiryMinutes { get; set; } = 60;
 }

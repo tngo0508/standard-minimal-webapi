@@ -4,10 +4,10 @@ A small, complete reference for building a Web API with:
 
 - **ASP.NET Core Minimal APIs** on .NET 10
 - **SQL Server** through **Entity Framework Core** (EF Core)
-- **JWT bearer authentication** with rotating **refresh tokens**
+- **JWT bearer authentication**
 
-It is meant to be read. Every pattern here is one you can copy into a real project. This guide assumes you know some C#
-but have not built an API like this before.
+It is meant to be read and learned from. Every pattern here is one you can copy into a real project. This guide assumes
+you know some C# but have not built an API like this before.
 
 ## Contents
 
@@ -31,22 +31,17 @@ but have not built an API like this before.
 
 ## 1. What this project does
 
-The API lets a user:
+The API manages two kinds of data, **categories** and **products**, with the four standard operations on each: create,
+read, update and delete (CRUD).
 
-1. **Register** with an email and password.
-2. **Log in** and receive two tokens.
-3. Use the tokens to call protected endpoints that manage **products** and **categories**.
+Every one of those endpoints is protected. A caller must first **log in** with a client id and secret to get a
+**token**, then send that token with each request.
 
-There are four database tables:
+The design is deliberately simple:
 
-| Table           | What it holds                                              |
-|-----------------|------------------------------------------------------------|
-| `Users`         | Registered users (email and a hashed password)             |
-| `RefreshTokens` | Long-lived login sessions, one row per issued refresh token |
-| `Categories`    | Product categories, such as "Tools"                        |
-| `Products`      | Products, each optionally belonging to one category        |
-
-`Products` and `Categories` are the sample business data. `Users` and `RefreshTokens` exist to support login.
+- **The database holds only business data**: a `Categories` table and a `Products` table.
+- **Nothing about login is stored in the database.** There is no users table and no token table. The one allowed
+  client id and secret live in configuration, and tokens are checked by their signature alone.
 
 ---
 
@@ -75,15 +70,26 @@ version for this folder only.
 dotnet tool restore
 ```
 
-**Step 2. Create a signing key.** The API signs tokens with a secret key. It is deliberately not stored in the repo, so
-each developer creates their own. This command generates a random one and saves it outside the project folder:
+**Step 2. Create the two secrets.** The API needs a key to sign tokens and a secret for the client that logs in.
+Neither is stored in the repo, so each developer creates their own. This script generates random values and saves them
+outside the project folder:
 
 ```powershell
-$bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); dotnet user-secrets set "Jwt:Key" ([Convert]::ToBase64String($bytes)) --project src/Api
+foreach ($name in "Jwt:Key", "ApiClient:ClientSecret") {
+    $bytes = New-Object byte[] 48
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    dotnet user-secrets set $name ([Convert]::ToBase64String($bytes)) --project src/Api
+}
 ```
 
-**Step 3. Create the database.** This creates a database named `StandardMinimalWebApi` in LocalDB and builds all the
-tables.
+You can look at them any time with:
+
+```powershell
+dotnet user-secrets list --project src/Api
+```
+
+**Step 3. Create the database.** This creates a database named `StandardMinimalWebApi` in LocalDB, builds the two
+tables, and inserts a few sample rows.
 
 ```powershell
 dotnet ef database update --project src/Api
@@ -103,27 +109,31 @@ Opening http://localhost:5106 in a browser should show `{"status":"ok"}`.
 
 ## 4. Try it out
 
-The easiest way is the ready-made request file [src/Api/Api.http](src/Api/Api.http). Open it in your editor and click
-"Send request" above each block, from top to bottom: **Register**, then **Login**, then anything else. The file
-remembers the token from the Login response and uses it in the later requests.
+**From your editor.** Open [src/Api/Api.http](src/Api/Api.http), paste your client secret into the `@clientSecret`
+line at the top (do not commit that change), then click "Send request" above **Login** first and anything else after.
+The file remembers the token from the Login response.
 
-Or use PowerShell while the API is running:
+**From PowerShell**, while the API is running in another window:
 
 ```powershell
 $base = "http://localhost:5106"
-$user = @{ email = "demo@example.test"; password = "ChangeMe-123!" } | ConvertTo-Json
 
-# 1. Register (only needed once)
-Invoke-RestMethod -Method Post "$base/auth/register" -Body $user -ContentType "application/json"
+# 1. Read the client secret you created in step 2
+$secret = (dotnet user-secrets list --project src/Api | Select-String '^ApiClient:ClientSecret') -replace '^ApiClient:ClientSecret = ', ''
 
-# 2. Log in and keep the tokens
-$tokens = Invoke-RestMethod -Method Post "$base/auth/login" -Body $user -ContentType "application/json"
-$auth = @{ Authorization = "Bearer $($tokens.accessToken)" }
+# 2. Log in and keep the token
+$login = @{ clientId = "demo-client"; clientSecret = $secret } | ConvertTo-Json
+$token = Invoke-RestMethod -Method Post "$base/auth/login" -Body $login -ContentType "application/json"
+$auth = @{ Authorization = "Bearer $($token.accessToken)" }
 
-# 3. Call a protected endpoint
-Invoke-RestMethod -Method Post "$base/categories" -Headers $auth -Body '{ "name": "Tools" }' -ContentType "application/json"
-Invoke-RestMethod -Method Post "$base/products" -Headers $auth -Body '{ "name": "Hammer", "price": 15, "categoryId": 1 }' -ContentType "application/json"
-Invoke-RestMethod "$base/products" -Headers $auth
+# 3. Read
+Invoke-RestMethod "$base/categories" -Headers $auth
+Invoke-RestMethod "$base/products?categoryId=1" -Headers $auth
+
+# 4. Create, update, delete
+$new = Invoke-RestMethod -Method Post "$base/products" -Headers $auth -Body '{ "name": "Stapler", "price": 8.5, "categoryId": 1 }' -ContentType "application/json"
+Invoke-RestMethod -Method Put "$base/products/$($new.id)" -Headers $auth -Body '{ "name": "Stapler XL", "price": 11 }' -ContentType "application/json"
+Invoke-RestMethod -Method Delete "$base/products/$($new.id)" -Headers $auth
 ```
 
 Try calling `/products` **without** the `-Headers $auth` part. You get `401 Unauthorized`. That is the protection
@@ -137,10 +147,19 @@ http://localhost:5106/openapi/v1.json while running in Development.
 ## 5. Key ideas in plain words
 
 **Web API.** A program that answers HTTP requests with data (JSON) instead of web pages. Other programs, such as a web
-front end or a mobile app, are its users.
+front end or another system, are its users.
 
 **Endpoint.** One URL plus one HTTP method, such as `GET /products`. Each endpoint runs one C# method, called its
 **handler**.
+
+**CRUD and HTTP methods.** The four basic data operations map onto HTTP methods:
+
+| Operation | HTTP method | Example |
+|-----------|-------------|---------|
+| Create    | `POST`      | `POST /products` |
+| Read      | `GET`       | `GET /products` or `GET /products/1` |
+| Update    | `PUT`       | `PUT /products/1` |
+| Delete    | `DELETE`    | `DELETE /products/1` |
 
 **Minimal API.** The ASP.NET Core style used here, where you map a URL straight to a handler method:
 `group.MapGet("/", GetAll)`. The older alternative is controller classes. Both do the same job; Minimal APIs need less
@@ -149,30 +168,20 @@ code.
 **EF Core.** A library that lets you work with database rows as C# objects. You write `db.Products.Add(product)` and
 EF Core writes the SQL `INSERT` for you.
 
-**Migration.** A generated C# file that describes one change to the database structure, such as "add the Categories
+**Migration.** A generated C# file that describes one change to the database structure, such as "create the Products
 table". Migrations are stored in the repo, so every developer and every server ends up with the same tables.
 
 **Dependency injection (DI).** You register services once in `Program.cs`. After that, any handler can ask for one just
 by listing it as a parameter. When a handler has an `AppDbContext db` parameter, ASP.NET Core creates the `AppDbContext`
 and passes it in. You never write `new AppDbContext(...)` yourself.
 
-**JWT (JSON Web Token).** A signed piece of text that says who the user is and when the token expires. The API creates
-it at login and signs it with the secret key. On later requests the API checks the signature; if it is valid, the API
-trusts the contents **without** looking anything up in the database. You can paste one into https://jwt.io to see
-inside. The contents are readable by anyone, so never put secrets in a token.
+**JWT (JSON Web Token).** A signed piece of text that says who the caller is and when the token expires. The API
+creates it at login and signs it with a secret key. On later requests the API checks the signature; if it is valid, the
+API trusts the contents **without looking anything up**. That is why this project needs no token table. You can paste
+a token into https://jwt.io to see inside. The contents are readable by anyone, so never put secrets in a token.
 
-**Access token and refresh token.** Two tokens with different jobs:
-
-| | Access token | Refresh token |
-|---|---|---|
-| What it is | A JWT | A random string with no meaning of its own |
-| Lifetime | 15 minutes | 14 days |
-| Used for | Calling protected endpoints | Getting a new access token |
-| Stored in the database | No | Yes, as a hash |
-| Can be cancelled early | No | Yes |
-
-The access token is short-lived because it cannot be cancelled. The refresh token lets the user stay logged in without
-typing their password every 15 minutes.
+**Client id and client secret.** A username and password for a program rather than a person. This API has exactly one,
+kept in configuration.
 
 ---
 
@@ -186,23 +195,22 @@ standard-minimal-webapi/
 ├── AGENTS.md, docs/agents/      settings for AI coding assistants; not part of the API
 └── src/Api/                     the one and only project
     ├── Program.cs               START HERE: registers services and wires everything up
-    ├── appsettings.json         non-secret settings (connection string, token lifetimes)
+    ├── appsettings.json         non-secret settings (connection string, token lifetime)
     ├── Api.http                 sample requests you can run from your editor
     ├── Auth/
-    │   ├── JwtOptions.cs        the "Jwt" settings as a C# class, with validation rules
-    │   ├── TokenService.cs      creates access tokens and refresh tokens
-    │   └── AuthEndpoints.cs     register, login, refresh, logout, me
+    │   ├── ApiClientOptions.cs  the allowed client id and secret, as a C# class
+    │   ├── JwtOptions.cs        the token settings, as a C# class
+    │   ├── TokenService.cs      creates a token
+    │   └── AuthEndpoints.cs     /auth/login and /auth/me
     ├── Categories/
     │   └── CategoryEndpoints.cs /categories endpoints
     ├── Products/
     │   └── ProductEndpoints.cs  /products endpoints
     ├── Entities/                one class per database table
-    │   ├── User.cs
-    │   ├── RefreshToken.cs
     │   ├── Category.cs
     │   └── Product.cs
     └── Data/
-        ├── AppDbContext.cs      the gateway to the database; table rules live here
+        ├── AppDbContext.cs      the gateway to the database; table rules and sample rows
         └── Migrations/          generated files; do not edit by hand
 ```
 
@@ -213,7 +221,7 @@ standard-minimal-webapi/
    [Categories/CategoryEndpoints.cs](src/Api/Categories/CategoryEndpoints.cs) — the simplest complete feature.
 3. [Products/ProductEndpoints.cs](src/Api/Products/ProductEndpoints.cs) — the same pattern plus a link to another table.
 4. [Data/AppDbContext.cs](src/Api/Data/AppDbContext.cs) — how the tables are configured.
-5. [Auth/TokenService.cs](src/Api/Auth/TokenService.cs) and [Auth/AuthEndpoints.cs](src/Api/Auth/AuthEndpoints.cs) —
+5. [Auth/AuthEndpoints.cs](src/Api/Auth/AuthEndpoints.cs) and [Auth/TokenService.cs](src/Api/Auth/TokenService.cs) —
    the login logic.
 
 ### The pattern every feature follows
@@ -221,11 +229,11 @@ standard-minimal-webapi/
 Each feature folder (`Products`, `Categories`) has one file with three parts:
 
 **1. Request and response records.** These define the JSON going in and out. They are separate from the entity class on
-purpose, so the JSON shape can differ from the table shape (the API never returns `PasswordHash`, for example).
+purpose, so the JSON shape can differ from the table shape.
 
 ```csharp
 public record CategoryRequest([property: Required, MaxLength(100)] string Name);
-public record CategoryResponse(int Id, string Name, DateTimeOffset CreatedAt);
+public record CategoryResponse(int Id, string Name);
 ```
 
 The attributes (`Required`, `MaxLength`) are validation rules. If a request breaks one, the API replies `400` with the
@@ -244,11 +252,10 @@ group.MapPost("/", Create);
 **3. The handlers.** One method per endpoint.
 
 ```csharp
-private static async Task<Results<Ok<CategoryResponse>, NotFound>> GetById(
-    int id, AppDbContext db, CancellationToken ct)
+private static async Task<Results<NoContent, NotFound>> Delete(int id, AppDbContext db, CancellationToken ct)
 {
-    var category = await db.Categories.AsNoTracking().SingleOrDefaultAsync(c => c.Id == id, ct);
-    return category is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(category));
+    var deleted = await db.Categories.Where(c => c.Id == id).ExecuteDeleteAsync(ct);
+    return deleted == 0 ? TypedResults.NotFound() : TypedResults.NoContent();
 }
 ```
 
@@ -256,12 +263,10 @@ Things to notice:
 
 - **Parameters are filled in automatically.** `id` comes from the URL, `db` from dependency injection, and a request
   record (when present) from the JSON body.
-- **The return type lists every possible outcome.** `Results<Ok<CategoryResponse>, NotFound>` means "either 200 with a
-  category, or 404". The compiler stops you returning anything else, and the OpenAPI document is generated from it.
-  This is why the code uses `TypedResults` rather than `Results`.
-- **`AsNoTracking()`** is used on read-only queries. It tells EF Core not to watch the objects for changes, which is
-  faster.
-- **`CancellationToken ct`** lets the database query stop early if the caller disconnects.
+- **The return type lists every possible outcome.** `Results<NoContent, NotFound>` means "either 204 or 404". The
+  compiler stops you returning anything else, and the OpenAPI document is generated from it. This is why the code uses
+  `TypedResults` rather than `Results`.
+- **`CancellationToken ct`** lets the database call stop early if the caller disconnects.
 
 ---
 
@@ -272,9 +277,9 @@ Take `GET /products` with a token. The request passes through the steps set up a
 
 1. **Exception handler.** Wraps everything that follows. If any later step crashes, the caller gets a clean `500`
    response instead of a stack trace.
-2. **Authentication.** Reads the `Authorization` header. If it holds a valid token, the request now has a known user.
-   A missing or bad token is not an error yet; the request simply has no user.
-3. **Authorization.** Checks whether this endpoint requires a user. `/products` does, so a request without one stops
+2. **Authentication.** Reads the `Authorization` header. If it holds a valid token, the request now has a known caller.
+   A missing or bad token is not an error yet; the request simply has no caller.
+3. **Authorization.** Checks whether this endpoint requires a caller. `/products` does, so a request without one stops
    here with **401 Unauthorized**.
 4. **Validation.** Checks the request body against the rules on the request record. A broken rule stops the request
    here with **400** and the reasons.
@@ -298,50 +303,43 @@ authentication must come before authorization.
 
 ## 8. Authentication in detail
 
-### The login lifecycle
+### The whole flow
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant A as API
-    participant D as Database
 
-    C->>A: POST /auth/login (email, password)
-    A->>D: find user, check password hash
-    A->>D: save hash of new refresh token
-    A-->>C: access token (15 min) + refresh token (14 days)
+    C->>A: POST /auth/login (clientId, clientSecret)
+    Note right of A: compare with the values in configuration
+    A-->>C: access token, valid 60 minutes
 
-    C->>A: GET /products with access token
-    A-->>C: 200 (signature checked, no database lookup for the token)
+    C->>A: GET /products with the token
+    Note right of A: check signature and expiry only
+    A-->>C: 200 with data
 
-    Note over C,A: 15 minutes later the access token expires
-    C->>A: GET /products with expired access token
+    Note over C,A: 60 minutes later the token expires
+    C->>A: GET /products with the expired token
     A-->>C: 401
-
-    C->>A: POST /auth/refresh (refresh token)
-    A->>D: mark old refresh token as used, save a new one
-    A-->>C: new access token + new refresh token
-
-    C->>A: POST /auth/logout (refresh token)
-    A->>D: mark refresh token as revoked
-    A-->>C: 204
+    C->>A: POST /auth/login again
+    A-->>C: new access token
 ```
 
-### What is inside an access token
+The database is not involved in any of this.
+
+### What is inside a token
 
 Created in [TokenService.cs](src/Api/Auth/TokenService.cs). Each piece of information is called a **claim**:
 
-| Claim   | Meaning                                  |
-|---------|------------------------------------------|
-| `sub`   | The user's id                            |
-| `email` | The user's email                         |
-| `jti`   | A unique id for this token               |
-| `iss`   | Issuer: who created the token (this API) |
-| `aud`   | Audience: who the token is meant for     |
-| `exp`   | When it expires                          |
+| Claim | Meaning                                  |
+|-------|------------------------------------------|
+| `sub` | Subject: the client id that logged in    |
+| `jti` | A unique id for this token               |
+| `iss` | Issuer: who created the token (this API) |
+| `aud` | Audience: who the token is meant for     |
+| `exp` | When it expires                          |
 
-A handler reads the current user from these claims. See `Me` in
-[AuthEndpoints.cs](src/Api/Auth/AuthEndpoints.cs).
+A handler can read the caller from these claims. See `Me` in [AuthEndpoints.cs](src/Api/Auth/AuthEndpoints.cs).
 
 ### How a token is checked
 
@@ -350,65 +348,59 @@ these hold: the signature matches our key, the issuer matches, the audience matc
 
 ### Security rules this project follows
 
-- **Passwords are never stored.** Only a salted hash is stored, produced by ASP.NET Core's `PasswordHasher`. A hash
-  cannot be turned back into the password.
-- **Login gives the same error for "unknown email" and "wrong password"**, so nobody can use it to discover which
-  emails are registered.
-- **Refresh tokens are stored as SHA-256 hashes.** If the database leaks, the stolen rows cannot be used to log in.
-- **Refresh tokens work once (rotation).** Each use returns a new one and retires the old one.
-- **Reuse detection.** If a retired refresh token is presented again, something is wrong: either a bug or a stolen
-  token. The API cannot tell which, so it revokes all of that user's refresh tokens and they must log in again.
-- **The signing key is never in source control.**
+- **The signing key and the client secret are never in source control.**
+- **Login gives the same error whether the id or the secret was wrong**, and compares them in constant time, so the
+  response reveals nothing about which part was incorrect.
+- **The app refuses to start** if either secret is missing or too short.
 
-### One limitation to understand
+### What this simple design cannot do
 
-**Logout does not cancel the access token.** It only revokes the refresh token. An access token already handed out
-keeps working until it expires, at most 15 minutes later. This is the normal trade-off with JWTs, and it is the reason
-access tokens are short-lived.
+Because nothing is stored, **a token cannot be cancelled**. Once issued, it works until it expires, 60 minutes later.
+There is also no logout and no way to stay logged in without calling `/auth/login` again.
+
+If you need those, the usual answer is **refresh tokens** stored in a database table. That is a good thing to learn
+next, but it is deliberately not part of this project.
 
 ---
 
 ## 9. The database
 
-### How the tables relate
+### The two tables
 
 ```mermaid
 erDiagram
-    Users ||--o{ RefreshTokens : "has"
     Categories ||--o{ Products : "groups"
 
-    Users {
-        int Id PK
-        string Email "unique"
-        string PasswordHash
-        datetimeoffset CreatedAt
-    }
-    RefreshTokens {
-        int Id PK
-        int UserId FK
-        string TokenHash "unique"
-        datetimeoffset ExpiresAt
-        datetimeoffset RevokedAt "null while active"
-    }
     Categories {
         int Id PK
-        string Name "unique"
-        datetimeoffset CreatedAt
+        string Name "unique, up to 100 characters"
     }
     Products {
         int Id PK
-        string Name
+        string Name "up to 200 characters"
         decimal Price
         int CategoryId FK "optional"
-        datetimeoffset CreatedAt
     }
 ```
 
-- Deleting a **user** deletes their refresh tokens.
+- A product belongs to **one category or none**.
 - Deleting a **category** keeps its products and sets their `CategoryId` to empty.
 
-Column sizes, unique rules and these delete behaviours are all defined in
+Column sizes, the unique rule, this delete behaviour and the sample rows are all defined in
 [AppDbContext.cs](src/Api/Data/AppDbContext.cs).
+
+### Sample data
+
+Creating the database inserts three categories (Tools, Garden, Kitchen) and six products, so there is something to
+query straight away. To get back to exactly this starting data at any time, delete and recreate the database:
+
+```powershell
+dotnet ef database drop --force --project src/Api
+```
+
+```powershell
+dotnet ef database update --project src/Api
+```
 
 ### Looking at the data
 
@@ -435,12 +427,11 @@ Never edit tables by hand. Change the C# and let EF Core generate the migration:
 
 5. Commit the migration files along with your code change.
 
-Other useful commands:
+To undo the last migration before it has been applied or shared:
 
-| Goal | Command |
-|------|---------|
-| Undo the last migration, if not yet applied or shared | `dotnet ef migrations remove --project src/Api` |
-| Delete the local database and start clean | `dotnet ef database drop --project src/Api` then `dotnet ef database update --project src/Api` |
+```powershell
+dotnet ef migrations remove --project src/Api
+```
 
 ### Using a different SQL Server
 
@@ -459,23 +450,18 @@ dotnet user-secrets set "ConnectionStrings:Default" "Server=localhost;Database=S
 
 ### Auth
 
-| Method | Path             | Auth   | Body                      | Success | Failures |
-|--------|------------------|--------|---------------------------|---------|----------|
-| POST   | `/auth/register` | none   | `email`, `password` (8+ characters) | 201 with the new user | 400 invalid input, 409 email already registered |
-| POST   | `/auth/login`    | none   | `email`, `password`       | 200 with tokens | 401 wrong email or password |
-| POST   | `/auth/refresh`  | none   | `refreshToken`            | 200 with new tokens | 401 unknown, used, revoked or expired token |
-| POST   | `/auth/logout`   | none   | `refreshToken`            | 204     | none; always succeeds |
-| GET    | `/auth/me`       | bearer |                           | 200 with the current user | 401 |
+| Method | Path          | Auth   | Body                       | Success | Failures |
+|--------|---------------|--------|----------------------------|---------|----------|
+| POST   | `/auth/login` | none   | `clientId`, `clientSecret` | 200 with a token | 400 a field is empty, 401 wrong id or secret |
+| GET    | `/auth/me`    | bearer |                            | 200 with the client id | 401 |
 
-A successful login or refresh returns:
+A successful login returns:
 
 ```json
 {
   "accessToken": "eyJhbGciOi...",
   "tokenType": "Bearer",
-  "expiresAt": "2026-11-20T20:07:42+00:00",
-  "refreshToken": "kq3...",
-  "refreshTokenExpiresAt": "2026-12-04T19:52:42+00:00"
+  "expiresAt": "2026-11-20T21:52:39+00:00"
 }
 ```
 
@@ -506,7 +492,6 @@ A product looks like this. `categoryId` and `categoryName` are `null` when the p
   "id": 1,
   "name": "Hammer",
   "price": 15.00,
-  "createdAt": "2026-11-20T20:11:51+00:00",
   "categoryId": 1,
   "categoryName": "Tools"
 }
@@ -522,7 +507,7 @@ Every protected endpoint also returns **401** when the token is missing, invalid
 | 201  | Created; the `Location` header holds the new item's URL |
 | 204  | Success, nothing to return |
 | 400  | The request body broke a validation rule |
-| 401  | Not logged in, or bad credentials |
+| 401  | No valid token, or wrong client id or secret |
 | 404  | No item with that id |
 | 409  | Conflicts with existing data, such as a duplicate name |
 
@@ -542,9 +527,10 @@ Settings are read from several places. Later ones override earlier ones:
 | `ConnectionStrings:Default` | LocalDB | Which database to use |
 | `Jwt:Issuer`                | `standard-minimal-webapi` | Written into each token and checked on the way back |
 | `Jwt:Audience`              | `standard-minimal-webapi-clients` | Same |
-| `Jwt:ExpiryMinutes`         | `15`    | Access token lifetime |
-| `Jwt:RefreshTokenDays`      | `14`    | Refresh token lifetime |
-| `Jwt:Key`                   | none    | **Secret.** The signing key; at least 32 characters |
+| `Jwt:ExpiryMinutes`         | `60`    | How long a token lasts |
+| `Jwt:Key`                   | none    | **Secret.** Signs tokens; at least 32 characters |
+| `ApiClient:ClientId`        | `demo-client` | The id the caller logs in with |
+| `ApiClient:ClientSecret`    | none    | **Secret.** The caller's password; at least 16 characters |
 
 **Rule: secrets never go in `appsettings.json`.** That file is in source control and visible to everyone with access to
 the repo.
@@ -553,13 +539,14 @@ On a server, set environment variables instead. Replace each `:` with two unders
 
 ```powershell
 $env:Jwt__Key = "<a long random value>"
+$env:ApiClient__ClientSecret = "<another long random value>"
 $env:ConnectionStrings__Default = "<production connection string>"
 ```
 
-The app checks the `Jwt` settings at startup and refuses to start if any are missing or the key is too short. The rules
-are in [JwtOptions.cs](src/Api/Auth/JwtOptions.cs).
+The app checks these settings at startup and refuses to start if any are missing or too short. The rules are in
+[JwtOptions.cs](src/Api/Auth/JwtOptions.cs) and [ApiClientOptions.cs](src/Api/Auth/ApiClientOptions.cs).
 
-Changing `Jwt:Key` makes every access token issued so far invalid.
+Changing `Jwt:Key` makes every token issued so far invalid.
 
 ---
 
@@ -599,12 +586,12 @@ To link the new table to another one, see how `Product.CategoryId` is done in
 
 | Symptom | Likely cause and fix |
 |---------|----------------------|
-| App stops at startup with `DataAnnotation validation failed for 'JwtOptions'` and mentions `Key` | The signing key is not set on this machine. Run step 2 of [Run it for the first time](#3-run-it-for-the-first-time). |
+| App stops at startup with `DataAnnotation validation failed for 'JwtOptions'` or `'ApiClientOptions'` | A secret is not set on this machine. Run step 2 of [Run it for the first time](#3-run-it-for-the-first-time). |
 | `Cannot open database "StandardMinimalWebApi"` or `Invalid object name 'Products'` | The database is missing or behind. Run `dotnet ef database update --project src/Api`. |
 | `A network-related or instance-specific error` when connecting | LocalDB is not installed or not started. Run `sqllocaldb start MSSQLLocalDB`, or point the connection string at another SQL Server. |
 | `dotnet ef` is not recognised | Run `dotnet tool restore` from the repository root. |
-| Every protected call returns 401 | The header must be exactly `Authorization: Bearer <access token>`. Check you sent the **access** token, not the refresh token, and that it is under 15 minutes old. Log in again to get a fresh one. |
-| `/auth/refresh` returns 401 | That refresh token was already used, revoked or has expired. Each one works once. Log in again. |
+| `/auth/login` returns 401 | The client id or secret does not match configuration. Check them with `dotnet user-secrets list --project src/Api`. |
+| Every protected call returns 401 | The header must be exactly `Authorization: Bearer <access token>`. The token may also be over 60 minutes old; log in again. |
 | All tokens stopped working after a config change | `Jwt:Key`, `Jwt:Issuer` or `Jwt:Audience` changed. Old tokens no longer match. Log in again. |
 | Warning `Failed to determine the https port for redirect` | Harmless when using the `http` launch profile. Use `--launch-profile https` to run with HTTPS on port 7229. |
 | `address already in use` on start | Another copy of the API is still running. Stop it, or change the port in `src/Api/Properties/launchSettings.json`. |
@@ -614,17 +601,16 @@ To link the new table to another one, see how `Product.CategoryId` is done in
 
 ## 14. Practice exercises
 
-The best way to learn this code is to change it. These go from easy to hard. Each one names the file to copy from.
+The best way to learn this code is to change it. These go from easy to hard.
 
 **Explore**
 
-1. Log in, copy the `accessToken`, and paste it into https://jwt.io. Find your user id and the expiry time.
+1. Log in, copy the `accessToken`, and paste it into https://jwt.io. Find the client id and the expiry time.
 2. Set `Jwt:ExpiryMinutes` to `1` in `appsettings.json`, restart, log in, and wait two minutes. Watch a protected call
-   start returning 401, then use `/auth/refresh` to recover.
-3. Call `/auth/refresh` twice with the same refresh token. Explain the second response using
-   [AuthEndpoints.cs](src/Api/Auth/AuthEndpoints.cs).
-4. Open the `RefreshTokens` table in a SQL tool after logging in, refreshing and logging out. Match each row to what
-   you did.
+   start returning 401.
+3. Change one character in the middle of a token and send it. Explain the result using the checks listed in
+   [section 8](#how-a-token-is-checked).
+4. Create, rename and delete a category through the API while watching the `Categories` table in a SQL tool.
 
 **Small changes**
 
@@ -642,23 +628,22 @@ The best way to learn this code is to change it. These go from easy to hard. Eac
 
 **Harder**
 
-11. Record who created each product: add a `CreatedByUserId` column and fill it from the `sub` claim, the same way
-    `Me` reads it.
-12. Add an `IsAdmin` flag to `User`, put it in the access token as a claim, and allow only admins to delete
-    categories.
-13. Add a test project and write a test that registers, logs in and creates a product.
+11. Allow more than one client: change `ApiClient` in configuration to a list, and accept any of them at login.
+12. Add a `scope` claim to the token (for example `read` or `read write`) and allow only `write` tokens to call the
+    POST, PUT and DELETE endpoints.
+13. Add a test project and write a test that logs in and creates a product.
 
 ---
 
 ## 15. Deliberately left out
 
-To stay small, this reference does not include the following. A real project will probably need them:
+To stay small, this reference does not include the following. A real project may need them:
 
 - **Automated tests.**
-- **Roles and permissions.** Every logged-in user can do everything.
-- **Account lockout and rate limiting** on the login endpoints, to slow down password guessing.
-- **Email confirmation and password reset.**
-- **Cleanup of old refresh tokens.** Expired and revoked rows are never deleted; purge them on a schedule.
+- **User accounts.** There is one client id and secret in configuration, not a table of users with passwords.
+- **Refresh tokens and logout.** A token cannot be cancelled before it expires.
+- **Permissions.** Any valid token can do everything.
+- **Rate limiting** on `/auth/login`, to slow down secret guessing.
 - **Paging** on the list endpoints. They return every row.
 - **CORS settings**, needed if a browser app on another address calls this API.
 - **Structured logging, health checks and deployment setup.**

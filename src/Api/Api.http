@@ -1,38 +1,27 @@
 @baseUrl = http://localhost:5106
-@email = demo@example.test
-@password = ChangeMe-123!
-
-### Register
-POST {{baseUrl}}/auth/register
-Content-Type: application/json
-
-{ "email": "{{email}}", "password": "{{password}}" }
+@clientId = demo-client
+# Paste the value shown by: dotnet user-secrets list --project src/Api
+@clientSecret = paste-your-client-secret-here
 
 ### Login (captures the token for the requests below)
 # @name login
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
-{ "email": "{{email}}", "password": "{{password}}" }
-
-### Refresh (single-use: run Login again before repeating this)
-POST {{baseUrl}}/auth/refresh
-Content-Type: application/json
-
-{ "refreshToken": "{{login.response.body.refreshToken}}" }
-
-### Logout (revokes the refresh token)
-POST {{baseUrl}}/auth/logout
-Content-Type: application/json
-
-{ "refreshToken": "{{login.response.body.refreshToken}}" }
+{ "clientId": "{{clientId}}", "clientSecret": "{{clientSecret}}" }
 
 ### Who am I
 GET {{baseUrl}}/auth/me
 Authorization: Bearer {{login.response.body.accessToken}}
 
+### ---------- Categories ----------
+
 ### List categories
 GET {{baseUrl}}/categories
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### Get one category
+GET {{baseUrl}}/categories/1
 Authorization: Bearer {{login.response.body.accessToken}}
 
 ### Create category
@@ -40,25 +29,31 @@ POST {{baseUrl}}/categories
 Authorization: Bearer {{login.response.body.accessToken}}
 Content-Type: application/json
 
-{ "name": "Tools" }
+{ "name": "Office" }
 
 ### Rename category
-PUT {{baseUrl}}/categories/1
+PUT {{baseUrl}}/categories/4
 Authorization: Bearer {{login.response.body.accessToken}}
 Content-Type: application/json
 
-{ "name": "Hand tools" }
+{ "name": "Stationery" }
 
 ### Delete category (its products become uncategorised)
-DELETE {{baseUrl}}/categories/1
+DELETE {{baseUrl}}/categories/4
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### ---------- Products ----------
+
+### List products
+GET {{baseUrl}}/products
 Authorization: Bearer {{login.response.body.accessToken}}
 
 ### List products in one category
 GET {{baseUrl}}/products?categoryId=1
 Authorization: Bearer {{login.response.body.accessToken}}
 
-### List products
-GET {{baseUrl}}/products
+### Get one product
+GET {{baseUrl}}/products/1
 Authorization: Bearer {{login.response.body.accessToken}}
 
 ### Create product
@@ -66,15 +61,15 @@ POST {{baseUrl}}/products
 Authorization: Bearer {{login.response.body.accessToken}}
 Content-Type: application/json
 
-{ "name": "Widget", "price": 9.99, "categoryId": 1 }
+{ "name": "Stapler", "price": 8.50, "categoryId": 1 }
 
 ### Update product
-PUT {{baseUrl}}/products/1
+PUT {{baseUrl}}/products/7
 Authorization: Bearer {{login.response.body.accessToken}}
 Content-Type: application/json
 
-{ "name": "Widget v2", "price": 12.50 }
+{ "name": "Stapler XL", "price": 11.00, "categoryId": 1 }
 
 ### Delete product
-DELETE {{baseUrl}}/products/1
+DELETE {{baseUrl}}/products/7
 Authorization: Bearer {{login.response.body.accessToken}}
