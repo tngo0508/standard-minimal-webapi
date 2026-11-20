@@ -7,8 +7,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Api.Products;
 
 public record ProductRequest(
-    [property: Required, MaxLength(200)] string Name,
-    [property: Range(0, 1_000_000)] decimal Price,
+    [Required, MaxLength(200)] string Name,
+    [Range(0, 1_000_000)] decimal Price,
     int? CategoryId = null);
 
 public record ProductResponse(int Id, string Name, decimal Price, int? CategoryId, string? CategoryName);
@@ -29,111 +29,139 @@ public static class ProductEndpoints
         return app;
     }
 
-    /// <summary>Lists products, optionally only those in one category.</summary>
+    /// <summary>Lists products. Add ?categoryId=1 to the URL to list one category only.</summary>
     private static async Task<Ok<List<ProductResponse>>> GetAll(
         AppDbContext db, CancellationToken ct, int? categoryId = null)
     {
-        IQueryable<Product> query = db.Products;
+        // Include(...) tells EF Core to load each product's category in the same query (a JOIN).
+        var query = db.Products.Include(p => p.Category).AsQueryable();
 
         if (categoryId is not null)
         {
             query = query.Where(p => p.CategoryId == categoryId);
         }
 
-        // Selecting only the needed columns, and reaching through the Category navigation,
-        // makes EF Core emit one SELECT with a LEFT JOIN to Categories.
-        var products = await query
-            .OrderBy(p => p.Id)
-            .Select(p => new ProductResponse(
-                p.Id, p.Name, p.Price, p.CategoryId, p.Category != null ? p.Category.Name : null))
-            .ToListAsync(ct);
+        var products = await query.OrderBy(p => p.Id).ToListAsync(ct);
 
-        return TypedResults.Ok(products);
+        var response = products.Select(ToResponse).ToList();
+        return TypedResults.Ok(response);
     }
 
     private static async Task<Results<Ok<ProductResponse>, NotFound>> GetById(
         int id, AppDbContext db, CancellationToken ct)
     {
-        var product = await db.Products
-            .AsNoTracking()
-            .Include(p => p.Category)
-            .SingleOrDefaultAsync(p => p.Id == id, ct);
-
-        return product is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(product));
-    }
-
-    private static async Task<Results<CreatedAtRoute<ProductResponse>, ValidationProblem>> Create(
-        ProductRequest request, AppDbContext db, CancellationToken ct)
-    {
-        var (category, problem) = await ResolveCategoryAsync(request.CategoryId, db, ct);
-        if (problem is not null)
-        {
-            return problem;
-        }
-
-        var product = new Product { Name = request.Name.Trim(), Price = request.Price, Category = category };
-
-        db.Products.Add(product);
-        await db.SaveChangesAsync(ct);
-
-        return TypedResults.CreatedAtRoute(ToResponse(product), "GetProductById", new { id = product.Id });
-    }
-
-    private static async Task<Results<Ok<ProductResponse>, NotFound, ValidationProblem>> Update(
-        int id, ProductRequest request, AppDbContext db, CancellationToken ct)
-    {
-        var product = await db.Products.SingleOrDefaultAsync(p => p.Id == id, ct);
+        var product = await FindProductAsync(id, db, ct);
         if (product is null)
         {
             return TypedResults.NotFound();
         }
 
-        var (category, problem) = await ResolveCategoryAsync(request.CategoryId, db, ct);
-        if (problem is not null)
+        return TypedResults.Ok(ToResponse(product));
+    }
+
+    private static async Task<Results<CreatedAtRoute<ProductResponse>, ValidationProblem>> Create(
+        ProductRequest request, AppDbContext db, CancellationToken ct)
+    {
+        if (!await CategoryExistsAsync(request.CategoryId, db, ct))
         {
-            return problem;
+            return UnknownCategoryProblem(request.CategoryId);
+        }
+
+        var product = new Product
+        {
+            Name = request.Name.Trim(),
+            Price = request.Price,
+            CategoryId = request.CategoryId,
+        };
+
+        db.Products.Add(product);
+        await db.SaveChangesAsync(ct);
+
+        // Read it back so the response includes the category name.
+        var saved = await FindProductAsync(product.Id, db, ct);
+
+        // 201 Created, with a Location header pointing at GET /products/{id}.
+        return TypedResults.CreatedAtRoute(ToResponse(saved!), "GetProductById", new { id = product.Id });
+    }
+
+    private static async Task<Results<Ok<ProductResponse>, NotFound, ValidationProblem>> Update(
+        int id, ProductRequest request, AppDbContext db, CancellationToken ct)
+    {
+        var product = await db.Products.FindAsync([id], ct);
+        if (product is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (!await CategoryExistsAsync(request.CategoryId, db, ct))
+        {
+            return UnknownCategoryProblem(request.CategoryId);
         }
 
         product.Name = request.Name.Trim();
         product.Price = request.Price;
-        product.CategoryId = category?.Id;
-        product.Category = category;
+        product.CategoryId = request.CategoryId;
         await db.SaveChangesAsync(ct);
 
-        return TypedResults.Ok(ToResponse(product));
+        // Read it back so the response includes the category name.
+        var saved = await FindProductAsync(id, db, ct);
+
+        return TypedResults.Ok(ToResponse(saved!));
     }
 
     private static async Task<Results<NoContent, NotFound>> Delete(int id, AppDbContext db, CancellationToken ct)
     {
-        var deleted = await db.Products.Where(p => p.Id == id).ExecuteDeleteAsync(ct);
-        return deleted == 0 ? TypedResults.NotFound() : TypedResults.NoContent();
+        var product = await db.Products.FindAsync([id], ct);
+        if (product is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        db.Products.Remove(product);
+        await db.SaveChangesAsync(ct);
+
+        return TypedResults.NoContent();
     }
 
-    /// <summary>
-    /// A CategoryId that points at nothing is a client error, reported the same way as
-    /// the data-annotation failures rather than surfacing as a foreign key exception.
-    /// </summary>
-    private static async Task<(Category? Category, ValidationProblem? Problem)> ResolveCategoryAsync(
-        int? categoryId, AppDbContext db, CancellationToken ct)
+    // ---- Helpers --------------------------------------------------------
+
+    /// <summary>Loads one product together with its category, or null if there is none.</summary>
+    private static async Task<Product?> FindProductAsync(int id, AppDbContext db, CancellationToken ct)
+    {
+        return await db.Products
+            .Include(p => p.Category)
+            .SingleOrDefaultAsync(p => p.Id == id, ct);
+    }
+
+    /// <summary>A product may have no category. If it names one, that category must exist.</summary>
+    private static async Task<bool> CategoryExistsAsync(int? categoryId, AppDbContext db, CancellationToken ct)
     {
         if (categoryId is null)
         {
-            return (null, null);
+            return true;
         }
 
-        var category = await db.Categories.SingleOrDefaultAsync(c => c.Id == categoryId, ct);
-        if (category is not null)
-        {
-            return (category, null);
-        }
-
-        var errors = new Dictionary<string, string[]>
-        {
-            [nameof(ProductRequest.CategoryId)] = [$"Category {categoryId} does not exist."],
-        };
-        return (null, TypedResults.ValidationProblem(errors));
+        return await db.Categories.AnyAsync(c => c.Id == categoryId, ct);
     }
 
-    private static ProductResponse ToResponse(Product p) =>
-        new(p.Id, p.Name, p.Price, p.CategoryId, p.Category?.Name);
+    /// <summary>A 400 response in the same shape as the automatic validation errors.</summary>
+    private static ValidationProblem UnknownCategoryProblem(int? categoryId)
+    {
+        var errors = new Dictionary<string, string[]>
+        {
+            ["CategoryId"] = [$"Category {categoryId} does not exist."],
+        };
+
+        return TypedResults.ValidationProblem(errors);
+    }
+
+    private static ProductResponse ToResponse(Product product)
+    {
+        return new ProductResponse(
+            product.Id,
+            product.Name,
+            product.Price,
+            product.CategoryId,
+            product.Category?.Name);
+    }
 }

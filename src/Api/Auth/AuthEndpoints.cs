@@ -1,7 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -9,8 +7,8 @@ using Microsoft.IdentityModel.JsonWebTokens;
 namespace Api.Auth;
 
 public record LoginRequest(
-    [property: Required] string ClientId,
-    [property: Required] string ClientSecret);
+    [Required] string ClientId,
+    [Required] string ClientSecret);
 
 public record TokenResponse(string AccessToken, string TokenType, DateTimeOffset ExpiresAt);
 
@@ -39,11 +37,10 @@ public static class AuthEndpoints
     {
         var client = clientOptions.Value;
 
-        // Check both values every time (& rather than &&) and compare in constant time,
-        // so response timing does not hint at which part was wrong.
-        var valid = FixedTimeEquals(request.ClientId, client.ClientId)
-                    & FixedTimeEquals(request.ClientSecret, client.ClientSecret);
+        var valid = request.ClientId == client.ClientId
+                    && request.ClientSecret == client.ClientSecret;
 
+        // Same message whichever part was wrong, so the reply gives no hint.
         if (!valid)
         {
             return TypedResults.Problem(
@@ -52,13 +49,17 @@ public static class AuthEndpoints
         }
 
         var token = tokens.CreateAccessToken(client.ClientId);
-        return TypedResults.Ok(new TokenResponse(token.Value, "Bearer", token.ExpiresAt));
+        var response = new TokenResponse(token.Value, "Bearer", token.ExpiresAt);
+
+        return TypedResults.Ok(response);
     }
 
     /// <summary>Shows who the token belongs to, read from the token's "sub" claim.</summary>
-    private static Ok<ClientResponse> Me(ClaimsPrincipal principal) =>
-        TypedResults.Ok(new ClientResponse(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)!));
+    private static Ok<ClientResponse> Me(ClaimsPrincipal caller)
+    {
+        // RequireAuthorization() guarantees a valid token, and every token we issue has "sub".
+        var clientId = caller.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private static bool FixedTimeEquals(string a, string b) =>
-        CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
+        return TypedResults.Ok(new ClientResponse(clientId));
+    }
 }

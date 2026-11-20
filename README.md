@@ -10,6 +10,10 @@ A small, complete reference for building a Web API with:
 It is meant to be read and learned from. Every pattern here is one you can copy into a real project. This guide assumes
 you know some C# but have not built an API like this before.
 
+**The code is deliberately plain.** It favours one step per line and ordinary, well-known calls over short or clever
+code, even where that makes it a little longer. Where a production system would do something more careful, this guide
+says so instead of putting it in the code.
+
 ## Contents
 
 1. [What this project does](#1-what-this-project-does)
@@ -163,11 +167,10 @@ The client walks through the whole workflow in eight steps and prints every requ
   -> POST /auth/login   { clientId: "demo-client", clientSecret: "********" }
   <- 200 OK   token of 333 characters, valid until 14:02:06
      The payload is only encoded, not encrypted. Anyone can read it:
-       {
-         "iss": "standard-minimal-webapi",
-         "sub": "demo-client",
-         ...
-       }
+         aud: standard-minimal-webapi-clients
+         iss: standard-minimal-webapi
+         exp: 1795214494
+         sub: demo-client
 
 --- Step 3: Call a protected endpoint with the token ---
   -> GET /auth/me   Authorization: Bearer <token>
@@ -334,7 +337,7 @@ Each feature folder (`Products`, `Categories`) has one file with three parts:
 purpose, so the JSON shape can differ from the table shape.
 
 ```csharp
-public record CategoryRequest([property: Required, MaxLength(100)] string Name);
+public record CategoryRequest([Required, MaxLength(100)] string Name);
 public record CategoryResponse(int Id, string Name);
 ```
 
@@ -356,10 +359,21 @@ group.MapPost("/", Create);
 ```csharp
 private static async Task<Results<NoContent, NotFound>> Delete(int id, AppDbContext db, CancellationToken ct)
 {
-    var deleted = await db.Categories.Where(c => c.Id == id).ExecuteDeleteAsync(ct);
-    return deleted == 0 ? TypedResults.NotFound() : TypedResults.NoContent();
+    var category = await db.Categories.FindAsync([id], ct);
+    if (category is null)
+    {
+        return TypedResults.NotFound();
+    }
+
+    db.Categories.Remove(category);
+    await db.SaveChangesAsync(ct);
+
+    return TypedResults.NoContent();
 }
 ```
+
+Every handler has the same shape: **find the row, return 404 if it is missing, make the change, save, return the
+result.**
 
 Things to notice:
 
@@ -451,9 +465,13 @@ these hold: the signature matches our key, the issuer matches, the audience matc
 ### Security rules this project follows
 
 - **The signing key and the client secret are never in source control.**
-- **Login gives the same error whether the id or the secret was wrong**, and compares them in constant time, so the
-  response reveals nothing about which part was incorrect.
+- **Login gives the same error whether the id or the secret was wrong**, so the response reveals nothing about which
+  part was incorrect.
 - **The app refuses to start** if either secret is missing or too short.
+
+One simplification to know about: `Login` compares the secret with a plain `==`. That is easy to read and fine for
+learning. A production API should compare secrets with `CryptographicOperations.FixedTimeEquals`, which always takes
+the same time and so cannot leak hints through response timing.
 
 ### What this simple design cannot do
 
@@ -688,7 +706,7 @@ Say you want to add **Suppliers**. Copy what `Categories` does:
 
 To link the new table to another one, see how `Product.CategoryId` is done in
 [Product.cs](src/Api/Entities/Product.cs), [AppDbContext.cs](src/Api/Data/AppDbContext.cs) and the
-`ResolveCategoryAsync` method in [ProductEndpoints.cs](src/Api/Products/ProductEndpoints.cs).
+`CategoryExistsAsync` method in [ProductEndpoints.cs](src/Api/Products/ProductEndpoints.cs).
 
 ---
 

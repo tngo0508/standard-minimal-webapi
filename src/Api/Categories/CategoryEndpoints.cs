@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Api.Categories;
 
-public record CategoryRequest([property: Required, MaxLength(100)] string Name);
+public record CategoryRequest([Required, MaxLength(100)] string Name);
 
 public record CategoryResponse(int Id, string Name);
 
@@ -39,12 +39,13 @@ public static class CategoryEndpoints
     private static async Task<Results<Ok<CategoryResponse>, NotFound>> GetById(
         int id, AppDbContext db, CancellationToken ct)
     {
-        var category = await db.Categories
-            .Where(c => c.Id == id)
-            .Select(c => new CategoryResponse(c.Id, c.Name))
-            .SingleOrDefaultAsync(ct);
+        var category = await db.Categories.FindAsync([id], ct);
+        if (category is null)
+        {
+            return TypedResults.NotFound();
+        }
 
-        return category is null ? TypedResults.NotFound() : TypedResults.Ok(category);
+        return TypedResults.Ok(new CategoryResponse(category.Id, category.Name));
     }
 
     private static async Task<Results<CreatedAtRoute<CategoryResponse>, ProblemHttpResult>> Create(
@@ -52,23 +53,25 @@ public static class CategoryEndpoints
     {
         var name = request.Name.Trim();
 
-        if (await db.Categories.AnyAsync(c => c.Name == name, ct))
+        var nameTaken = await db.Categories.AnyAsync(c => c.Name == name, ct);
+        if (nameTaken)
         {
-            return NameTaken();
+            return NameTakenProblem();
         }
 
         var category = new Category { Name = name };
         db.Categories.Add(category);
         await db.SaveChangesAsync(ct);
 
-        return TypedResults.CreatedAtRoute(
-            new CategoryResponse(category.Id, category.Name), "GetCategoryById", new { id = category.Id });
+        // 201 Created, with a Location header pointing at GET /categories/{id}.
+        var response = new CategoryResponse(category.Id, category.Name);
+        return TypedResults.CreatedAtRoute(response, "GetCategoryById", new { id = category.Id });
     }
 
     private static async Task<Results<Ok<CategoryResponse>, NotFound, ProblemHttpResult>> Update(
         int id, CategoryRequest request, AppDbContext db, CancellationToken ct)
     {
-        var category = await db.Categories.SingleOrDefaultAsync(c => c.Id == id, ct);
+        var category = await db.Categories.FindAsync([id], ct);
         if (category is null)
         {
             return TypedResults.NotFound();
@@ -76,9 +79,10 @@ public static class CategoryEndpoints
 
         var name = request.Name.Trim();
 
-        if (await db.Categories.AnyAsync(c => c.Name == name && c.Id != id, ct))
+        var nameTaken = await db.Categories.AnyAsync(c => c.Name == name && c.Id != id, ct);
+        if (nameTaken)
         {
-            return NameTaken();
+            return NameTakenProblem();
         }
 
         category.Name = name;
@@ -89,13 +93,23 @@ public static class CategoryEndpoints
 
     private static async Task<Results<NoContent, NotFound>> Delete(int id, AppDbContext db, CancellationToken ct)
     {
-        // The foreign key is ON DELETE SET NULL, so products in this category survive.
-        var deleted = await db.Categories.Where(c => c.Id == id).ExecuteDeleteAsync(ct);
-        return deleted == 0 ? TypedResults.NotFound() : TypedResults.NoContent();
+        var category = await db.Categories.FindAsync([id], ct);
+        if (category is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Products in this category are kept; the database clears their CategoryId.
+        db.Categories.Remove(category);
+        await db.SaveChangesAsync(ct);
+
+        return TypedResults.NoContent();
     }
 
-    private static ProblemHttpResult NameTaken() =>
-        TypedResults.Problem(
+    private static ProblemHttpResult NameTakenProblem()
+    {
+        return TypedResults.Problem(
             statusCode: StatusCodes.Status409Conflict,
             title: "A category with this name already exists.");
+    }
 }

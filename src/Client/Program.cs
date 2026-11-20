@@ -1,12 +1,15 @@
-﻿using System.Text;
+﻿using System.Buffers.Text;
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using Client;
 using Microsoft.Extensions.Configuration;
 
 // A guided tour of the API. Run the API first, then run this program.
-// Each step prints what it sends and what comes back.
+// Each step prints what it sends (->) and what comes back (<-).
 
 // ---- Settings ---------------------------------------------------------------
+// Read from appsettings.json, then user-secrets, then environment variables.
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json")
@@ -24,7 +27,7 @@ if (string.IsNullOrEmpty(clientSecret))
     return 1;
 }
 
-using var http = new HttpClient { BaseAddress = new Uri(baseUrl) };
+var http = new HttpClient { BaseAddress = new Uri(baseUrl) };
 var api = new ApiClient(http, clientId, clientSecret);
 
 try
@@ -42,7 +45,7 @@ try
     Got($"200 OK   token of {token.AccessToken.Length} characters, valid until {token.ExpiresAt.ToLocalTime():HH:mm:ss}");
     Note("A token is three parts separated by dots: header.payload.signature");
     Note("The payload is only encoded, not encrypted. Anyone can read it:");
-    Console.WriteLine(Indent(DecodePayload(token.AccessToken)));
+    Console.WriteLine(ReadTokenPayload(token.AccessToken));
     Note("The signature is what stops anyone changing it. Only the API holds the signing key.");
 
     // ---- 3. Use the token ---------------------------------------------------
@@ -67,19 +70,20 @@ try
     Got($"200 OK   {products.Count} products");
     foreach (var p in products)
     {
-        Console.WriteLine($"         {p.Id,3}  {p.Name,-18} {p.Price,8:0.00}  {p.CategoryName ?? "(no category)"}");
+        var categoryName = p.CategoryName ?? "(no category)";
+        Console.WriteLine($"         {p.Id,3}  {p.Name,-18} {p.Price,8:0.00}  {categoryName}");
     }
 
     var firstCategory = categories[0];
     Sent($"GET /products?categoryId={firstCategory.Id}");
-    var filtered = await api.GetProductsAsync(firstCategory.Id);
-    Got($"200 OK   {filtered.Count} products in \"{firstCategory.Name}\"");
+    var productsInCategory = await api.GetProductsInCategoryAsync(firstCategory.Id);
+    Got($"200 OK   {productsInCategory.Count} products in \"{firstCategory.Name}\"");
 
     // ---- 5. Create ----------------------------------------------------------
     Step(5, "Create a category and a product in it");
-    var categoryName = $"Demo {DateTime.Now:HHmmss}";
-    Sent($"POST /categories   {{ name: \"{categoryName}\" }}");
-    var category = await api.CreateCategoryAsync(categoryName);
+    var newCategoryName = $"Demo {DateTime.Now:HHmmss}";
+    Sent($"POST /categories   {{ name: \"{newCategoryName}\" }}");
+    var category = await api.CreateCategoryAsync(newCategoryName);
     Got($"201 Created   new category has id {category.Id}");
 
     Sent($"POST /products   {{ name: \"Demo product\", price: 9.99, categoryId: {category.Id} }}");
@@ -93,16 +97,39 @@ try
     Got($"200 OK   now \"{product.Name}\" at {product.Price:0.00}");
 
     // ---- 7. Errors ----------------------------------------------------------
+    // Each call below is meant to fail. ApiClient reports a failure by throwing an
+    // ApiException, so each one is wrapped in try/catch and the error is printed.
     Step(7, "See what errors look like");
 
     Sent("POST /products   { name: \"\", price: -1 }   (breaks two validation rules)");
-    await ExpectFailure(() => api.CreateProductAsync(new ProductRequest("", -1m)));
+    try
+    {
+        await api.CreateProductAsync(new ProductRequest("", -1m));
+    }
+    catch (ApiException error)
+    {
+        PrintError(error);
+    }
 
-    Sent($"POST /categories   {{ name: \"{categoryName}\" }}   (name already exists)");
-    await ExpectFailure(() => api.CreateCategoryAsync(categoryName));
+    Sent($"POST /categories   {{ name: \"{newCategoryName}\" }}   (name already exists)");
+    try
+    {
+        await api.CreateCategoryAsync(newCategoryName);
+    }
+    catch (ApiException error)
+    {
+        PrintError(error);
+    }
 
     Sent("GET /products/999999   (no such product)");
-    await ExpectFailure(() => api.GetProductAsync(999999));
+    try
+    {
+        await api.GetProductAsync(999999);
+    }
+    catch (ApiException error)
+    {
+        PrintError(error);
+    }
 
     // ---- 8. Delete ----------------------------------------------------------
     Step(8, "Delete what we created, leaving the database as we found it");
@@ -120,16 +147,19 @@ try
 }
 catch (HttpRequestException)
 {
+    // The request never reached the API at all.
     Console.WriteLine();
     Console.WriteLine($"Could not reach the API at {baseUrl}. Start it first, in another window:");
     Console.WriteLine("  dotnet run --project src/Api --launch-profile http");
     return 1;
 }
-catch (ApiException ex)
+catch (ApiException error)
 {
+    // The API answered, but with an error we did not expect at that step.
     Console.WriteLine();
-    Console.WriteLine($"The API returned an unexpected error: {ex.Message}");
-    if (ex.Status == System.Net.HttpStatusCode.Unauthorized)
+    Console.WriteLine($"The API returned an unexpected error: {error.Message}");
+
+    if (error.Status == HttpStatusCode.Unauthorized)
     {
         Console.WriteLine("Check that the client secret matches the API's. See step 2 of the first-run steps in the README.");
     }
@@ -145,39 +175,59 @@ static void Step(int number, string title)
     Console.WriteLine($"--- Step {number}: {title} ---");
 }
 
-static void Sent(string text) => Console.WriteLine($"  -> {text}");
-
-static void Got(string text) => Console.WriteLine($"  <- {text}");
-
-static void Note(string text) => Console.WriteLine($"     {text}");
-
-static string Indent(string text) =>
-    string.Join(Environment.NewLine, text.Split('\n').Select(line => "       " + line.TrimEnd('\r')));
-
-static async Task ExpectFailure(Func<Task> call)
+static void Sent(string text)
 {
-    try
+    Console.WriteLine($"  -> {text}");
+}
+
+static void Got(string text)
+{
+    Console.WriteLine($"  <- {text}");
+}
+
+static void Note(string text)
+{
+    Console.WriteLine($"     {text}");
+}
+
+static void PrintError(ApiException error)
+{
+    Got(error.Message);
+
+    // Validation errors (400) also list which fields were wrong and why.
+    if (error.Errors is null)
     {
-        await call();
-        Got("unexpectedly succeeded");
+        return;
     }
-    catch (ApiException ex)
+
+    foreach (var field in error.Errors)
     {
-        Got(ex.Message);
-        foreach (var (field, messages) in ex.Errors ?? [])
-        {
-            Console.WriteLine($"         {field}: {string.Join(" ", messages)}");
-        }
+        var messages = string.Join(" ", field.Value);
+        Console.WriteLine($"         {field.Key}: {messages}");
     }
 }
 
-/// <summary>Reads the middle part of a JWT. No key is needed, which is exactly the point.</summary>
-static string DecodePayload(string jwt)
+/// <summary>
+/// Returns the middle part of a token as readable JSON.
+/// No key is needed to do this, which is exactly the point: a token is not secret.
+/// </summary>
+static string ReadTokenPayload(string token)
 {
-    var payload = jwt.Split('.')[1].Replace('-', '+').Replace('_', '/');
-    payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+    // header.payload.signature -> take the payload
+    var payload = token.Split('.')[1];
 
-    var json = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
-    using var document = JsonDocument.Parse(json);
-    return JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true });
+    // The payload is JSON, encoded as Base64Url so it is safe to put in an HTTP header.
+    var jsonBytes = Base64Url.DecodeFromChars(payload);
+    var json = Encoding.UTF8.GetString(jsonBytes);
+
+    // Re-format it with one claim per line, indented to line up with the other output.
+    var claims = JsonSerializer.Deserialize<Dictionary<string, object>>(json)!;
+
+    var lines = new StringBuilder();
+    foreach (var claim in claims)
+    {
+        lines.AppendLine($"         {claim.Key}: {claim.Value}");
+    }
+
+    return lines.ToString().TrimEnd();
 }
