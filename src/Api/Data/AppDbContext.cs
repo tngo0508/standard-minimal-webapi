@@ -7,6 +7,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Product> Products => Set<Product>();
+    public DbSet<Category> Categories => Set<Category>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -28,6 +29,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             product.Property(p => p.Name).HasMaxLength(200);
             product.Property(p => p.Price).HasPrecision(18, 2);
+
+            // Deleting a category leaves its products in place, uncategorised.
+            product.HasOne(p => p.Category)
+                .WithMany()
+                .HasForeignKey(p => p.CategoryId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<Category>(category =>
+        {
+            category.Property(c => c.Name).HasMaxLength(100);
+            category.HasIndex(c => c.Name).IsUnique();
         });
     }
 }

@@ -10,8 +10,9 @@ src/Api/
 ├── Program.cs              service registration and pipeline
 ├── Auth/                   JwtOptions, TokenService, /auth endpoints
 ├── Products/               /products CRUD endpoints (all require a token)
+├── Categories/             /categories CRUD endpoints; a product optionally belongs to one
 ├── Data/                   AppDbContext and EF Core migrations
-├── Entities/               User, Product
+├── Entities/               User, Product, Category, RefreshToken
 └── Api.http                sample requests
 ```
 
@@ -35,11 +36,19 @@ The API listens on `http://localhost:5106`. The OpenAPI document is at `/openapi
 | POST   | `/auth/refresh`  | none   | Exchange a refresh token for a new pair |
 | POST   | `/auth/logout`   | none   | Revoke a refresh token            |
 | GET    | `/auth/me`       | bearer | Return the caller from the token  |
-| GET    | `/products`      | bearer | List products                     |
+| GET    | `/categories`    | bearer | List categories                   |
+| GET    | `/categories/{id}` | bearer | Get one category                |
+| POST   | `/categories`    | bearer | Create a category (names are unique) |
+| PUT    | `/categories/{id}` | bearer | Rename a category               |
+| DELETE | `/categories/{id}` | bearer | Delete a category; its products become uncategorised |
+| GET    | `/products`      | bearer | List products; `?categoryId=` filters by category |
 | GET    | `/products/{id}` | bearer | Get one product                   |
 | POST   | `/products`      | bearer | Create a product                  |
 | PUT    | `/products/{id}` | bearer | Replace a product                 |
 | DELETE | `/products/{id}` | bearer | Delete a product                  |
+
+A product has an optional `categoryId`. Product responses include `categoryId` and `categoryName`; a `categoryId` that
+does not exist is rejected with a 400 validation error.
 
 ## Tokens
 

@@ -31,6 +31,32 @@ Content-Type: application/json
 GET {{baseUrl}}/auth/me
 Authorization: Bearer {{login.response.body.accessToken}}
 
+### List categories
+GET {{baseUrl}}/categories
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### Create category
+POST {{baseUrl}}/categories
+Authorization: Bearer {{login.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Tools" }
+
+### Rename category
+PUT {{baseUrl}}/categories/1
+Authorization: Bearer {{login.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hand tools" }
+
+### Delete category (its products become uncategorised)
+DELETE {{baseUrl}}/categories/1
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### List products in one category
+GET {{baseUrl}}/products?categoryId=1
+Authorization: Bearer {{login.response.body.accessToken}}
+
 ### List products
 GET {{baseUrl}}/products
 Authorization: Bearer {{login.response.body.accessToken}}
@@ -40,7 +66,7 @@ POST {{baseUrl}}/products
 Authorization: Bearer {{login.response.body.accessToken}}
 Content-Type: application/json
 
-{ "name": "Widget", "price": 9.99 }
+{ "name": "Widget", "price": 9.99, "categoryId": 1 }
 
 ### Update product
 PUT {{baseUrl}}/products/1

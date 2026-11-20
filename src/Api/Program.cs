@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using Api.Auth;
+using Api.Categories;
 using Api.Data;
 using Api.Entities;
 using Api.Products;
@@ -71,6 +72,7 @@ app.UseAuthorization();
 
 app.MapGet("/", () => TypedResults.Ok(new { status = "ok" })).ExcludeFromDescription();
 app.MapAuthEndpoints();
+app.MapCategoryEndpoints();
 app.MapProductEndpoints();
 
 app.Run();
