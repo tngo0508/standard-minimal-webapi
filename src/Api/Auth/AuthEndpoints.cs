@@ -2,6 +2,7 @@
 using System.Security.Claims;
 using Api.Data;
 using Api.Entities;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -33,16 +34,16 @@ public static class AuthEndpoints
     {
         var group = app.MapGroup("/auth").WithTags("Auth");
 
-        group.MapPost("/register", Register);
-        group.MapPost("/login", Login);
-        group.MapPost("/refresh", Refresh);
+        group.MapPost("/register", Register).ProducesProblem(StatusCodes.Status409Conflict);
+        group.MapPost("/login", Login).ProducesProblem(StatusCodes.Status401Unauthorized);
+        group.MapPost("/refresh", Refresh).ProducesProblem(StatusCodes.Status401Unauthorized);
         group.MapPost("/logout", Logout);
         group.MapGet("/me", Me).RequireAuthorization();
 
         return app;
     }
 
-    private static async Task<IResult> Register(
+    private static async Task<Results<Created<UserResponse>, ProblemHttpResult>> Register(
         RegisterRequest request,
         AppDbContext db,
         IPasswordHasher<User> hasher,
@@ -52,7 +53,7 @@ public static class AuthEndpoints
 
         if (await db.Users.AnyAsync(u => u.Email == email, ct))
         {
-            return Results.Problem(
+            return TypedResults.Problem(
                 statusCode: StatusCodes.Status409Conflict,
                 title: "Email is already registered.");
         }
@@ -63,10 +64,10 @@ public static class AuthEndpoints
         db.Users.Add(user);
         await db.SaveChangesAsync(ct);
 
-        return Results.Created("/auth/me", new UserResponse(user.Id, user.Email));
+        return TypedResults.Created("/auth/me", new UserResponse(user.Id, user.Email));
     }
 
-    private static async Task<IResult> Login(
+    private static async Task<Results<Ok<TokenResponse>, ProblemHttpResult>> Login(
         LoginRequest request,
         AppDbContext db,
         IPasswordHasher<User> hasher,
@@ -95,14 +96,14 @@ public static class AuthEndpoints
             user.PasswordHash = hasher.HashPassword(user, request.Password);
         }
 
-        return Results.Ok(await IssueTokensAsync(user, db, tokens, time, ct));
+        return TypedResults.Ok(await IssueTokensAsync(user, db, tokens, time, ct));
     }
 
     /// <summary>
     /// Exchanges a refresh token for a new access token and a new refresh token.
     /// Refresh tokens are single-use: each call revokes the one presented (rotation).
     /// </summary>
-    private static async Task<IResult> Refresh(
+    private static async Task<Results<Ok<TokenResponse>, ProblemHttpResult>> Refresh(
         RefreshRequest request,
         AppDbContext db,
         TokenService tokens,
@@ -148,7 +149,7 @@ public static class AuthEndpoints
             return Unauthorized("Invalid refresh token.");
         }
 
-        return Results.Ok(await IssueTokensAsync(stored.User, db, tokens, time, ct));
+        return TypedResults.Ok(await IssueTokensAsync(stored.User, db, tokens, time, ct));
     }
 
     /// <summary>
@@ -156,7 +157,7 @@ public static class AuthEndpoints
     /// known. The current access token stays valid until it expires, which is why
     /// access tokens are short-lived.
     /// </summary>
-    private static async Task<IResult> Logout(
+    private static async Task<NoContent> Logout(
         RefreshRequest request,
         AppDbContext db,
         TimeProvider time,
@@ -169,14 +170,14 @@ public static class AuthEndpoints
             .Where(t => t.TokenHash == hash && t.RevokedAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
 
-        return Results.NoContent();
+        return TypedResults.NoContent();
     }
 
-    private static IResult Me(ClaimsPrincipal principal)
+    private static Ok<UserResponse> Me(ClaimsPrincipal principal)
     {
         var id = int.Parse(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
         var email = principal.FindFirstValue(JwtRegisteredClaimNames.Email)!;
-        return Results.Ok(new UserResponse(id, email));
+        return TypedResults.Ok(new UserResponse(id, email));
     }
 
     private static async Task<TokenResponse> IssueTokensAsync(
@@ -201,8 +202,8 @@ public static class AuthEndpoints
         return new TokenResponse(access.Value, "Bearer", access.ExpiresAt, refresh.Value, refresh.ExpiresAt);
     }
 
-    private static IResult Unauthorized(string title) =>
-        Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: title);
+    private static ProblemHttpResult Unauthorized(string title) =>
+        TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: title);
 
     private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
 }

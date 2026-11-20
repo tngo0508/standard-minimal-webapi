@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using Api.Data;
 using Api.Entities;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 
 namespace Api.Products;
@@ -27,7 +28,7 @@ public static class ProductEndpoints
         return app;
     }
 
-    private static async Task<IResult> GetAll(AppDbContext db, CancellationToken ct)
+    private static async Task<Ok<List<ProductResponse>>> GetAll(AppDbContext db, CancellationToken ct)
     {
         var products = await db.Products
             .AsNoTracking()
@@ -35,44 +36,44 @@ public static class ProductEndpoints
             .Select(p => new ProductResponse(p.Id, p.Name, p.Price, p.CreatedAt))
             .ToListAsync(ct);
 
-        return Results.Ok(products);
+        return TypedResults.Ok(products);
     }
 
-    private static async Task<IResult> GetById(int id, AppDbContext db, CancellationToken ct)
+    private static async Task<Results<Ok<ProductResponse>, NotFound>> GetById(int id, AppDbContext db, CancellationToken ct)
     {
         var product = await db.Products.AsNoTracking().SingleOrDefaultAsync(p => p.Id == id, ct);
-        return product is null ? Results.NotFound() : Results.Ok(ToResponse(product));
+        return product is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(product));
     }
 
-    private static async Task<IResult> Create(ProductRequest request, AppDbContext db, CancellationToken ct)
+    private static async Task<CreatedAtRoute<ProductResponse>> Create(ProductRequest request, AppDbContext db, CancellationToken ct)
     {
         var product = new Product { Name = request.Name.Trim(), Price = request.Price };
 
         db.Products.Add(product);
         await db.SaveChangesAsync(ct);
 
-        return Results.CreatedAtRoute("GetProductById", new { id = product.Id }, ToResponse(product));
+        return TypedResults.CreatedAtRoute(ToResponse(product), "GetProductById", new { id = product.Id });
     }
 
-    private static async Task<IResult> Update(int id, ProductRequest request, AppDbContext db, CancellationToken ct)
+    private static async Task<Results<Ok<ProductResponse>, NotFound>> Update(int id, ProductRequest request, AppDbContext db, CancellationToken ct)
     {
         var product = await db.Products.SingleOrDefaultAsync(p => p.Id == id, ct);
         if (product is null)
         {
-            return Results.NotFound();
+            return TypedResults.NotFound();
         }
 
         product.Name = request.Name.Trim();
         product.Price = request.Price;
         await db.SaveChangesAsync(ct);
 
-        return Results.Ok(ToResponse(product));
+        return TypedResults.Ok(ToResponse(product));
     }
 
-    private static async Task<IResult> Delete(int id, AppDbContext db, CancellationToken ct)
+    private static async Task<Results<NoContent, NotFound>> Delete(int id, AppDbContext db, CancellationToken ct)
     {
         var deleted = await db.Products.Where(p => p.Id == id).ExecuteDeleteAsync(ct);
-        return deleted == 0 ? Results.NotFound() : Results.NoContent();
+        return deleted == 0 ? TypedResults.NotFound() : TypedResults.NoContent();
     }
 
     private static ProductResponse ToResponse(Product p) => new(p.Id, p.Name, p.Price, p.CreatedAt);

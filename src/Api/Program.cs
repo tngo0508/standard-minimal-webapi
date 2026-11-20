@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Api.Auth;
 using Api.Data;
 using Api.Entities;
@@ -69,7 +69,7 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/", () => Results.Ok(new { status = "ok" })).ExcludeFromDescription();
+app.MapGet("/", () => TypedResults.Ok(new { status = "ok" })).ExcludeFromDescription();
 app.MapAuthEndpoints();
 app.MapProductEndpoints();
 
