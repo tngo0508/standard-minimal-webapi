@@ -1,0 +1,42 @@
+@baseUrl = http://localhost:5106
+@email = demo@example.test
+@password = ChangeMe-123!
+
+### Register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{ "email": "{{email}}", "password": "{{password}}" }
+
+### Login (captures the token for the requests below)
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "{{email}}", "password": "{{password}}" }
+
+### Who am I
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### List products
+GET {{baseUrl}}/products
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### Create product
+POST {{baseUrl}}/products
+Authorization: Bearer {{login.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Widget", "price": 9.99 }
+
+### Update product
+PUT {{baseUrl}}/products/1
+Authorization: Bearer {{login.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Widget v2", "price": 12.50 }
+
+### Delete product
+DELETE {{baseUrl}}/products/1
+Authorization: Bearer {{login.response.body.accessToken}}
