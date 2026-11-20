@@ -270,17 +270,19 @@ Things to notice:
 Take `GET /products` with a token. The request passes through the steps set up at the bottom of
 [Program.cs](src/Api/Program.cs), in order:
 
-```mermaid
-flowchart TD
-    A["Request arrives"] --> B["Exception handler: turns crashes into a clean 500 response"]
-    B --> C["Authentication: reads the Authorization header and checks the token"]
-    C --> D{"Authorization: does this endpoint need a user, and is there one?"}
-    D -- no valid token --> E["401 Unauthorized"]
-    D -- ok --> F["Validation: checks the request body rules"]
-    F -- rule broken --> G["400 with error details"]
-    F -- ok --> H["Handler runs and talks to the database"]
-    H --> I["JSON response"]
-```
+1. **Exception handler.** Wraps everything that follows. If any later step crashes, the caller gets a clean `500`
+   response instead of a stack trace.
+2. **Authentication.** Reads the `Authorization` header. If it holds a valid token, the request now has a known user.
+   A missing or bad token is not an error yet; the request simply has no user.
+3. **Authorization.** Checks whether this endpoint requires a user. `/products` does, so a request without one stops
+   here with **401 Unauthorized**.
+4. **Validation.** Checks the request body against the rules on the request record. A broken rule stops the request
+   here with **400** and the reasons.
+5. **Handler.** Your method runs, talks to the database, and returns a result.
+6. **Response.** The result is written out as JSON with its status code.
+
+Steps 1 to 3 are **middleware**: code that every request passes through. Their order in `Program.cs` matters;
+authentication must come before authorization.
 
 **Error responses always have the same shape**, called Problem Details:
 
