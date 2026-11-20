@@ -12,64 +12,64 @@ Content-Type: application/json
 
 ### Who am I
 GET {{baseUrl}}/auth/me
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### ---------- Categories ----------
 
 ### List categories
 GET {{baseUrl}}/categories
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### Get one category
 GET {{baseUrl}}/categories/1
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### Create category
 POST {{baseUrl}}/categories
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 Content-Type: application/json
 
 { "name": "Office" }
 
 ### Rename category
 PUT {{baseUrl}}/categories/4
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 Content-Type: application/json
 
 { "name": "Stationery" }
 
 ### Delete category (its products become uncategorised)
 DELETE {{baseUrl}}/categories/4
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### ---------- Products ----------
 
 ### List products
 GET {{baseUrl}}/products
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### List products in one category
 GET {{baseUrl}}/products?categoryId=1
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### Get one product
 GET {{baseUrl}}/products/1
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 
 ### Create product
 POST {{baseUrl}}/products
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 Content-Type: application/json
 
 { "name": "Stapler", "price": 8.50, "categoryId": 1 }
 
 ### Update product
 PUT {{baseUrl}}/products/7
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
 Content-Type: application/json
 
 { "name": "Stapler XL", "price": 11.00, "categoryId": 1 }
 
 ### Delete product
 DELETE {{baseUrl}}/products/7
-Authorization: Bearer {{login.response.body.accessToken}}
+Authorization: Bearer {{login.response.body.$.accessToken}}
