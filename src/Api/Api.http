@@ -15,6 +15,18 @@ Content-Type: application/json
 
 { "email": "{{email}}", "password": "{{password}}" }
 
+### Refresh (single-use: run Login again before repeating this)
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{login.response.body.refreshToken}}" }
+
+### Logout (revokes the refresh token)
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+
+{ "refreshToken": "{{login.response.body.refreshToken}}" }
+
 ### Who am I
 GET {{baseUrl}}/auth/me
 Authorization: Bearer {{login.response.body.accessToken}}
