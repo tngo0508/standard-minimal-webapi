@@ -5,6 +5,7 @@ A small, complete reference for building a Web API with:
 - **ASP.NET Core Minimal APIs** on .NET 10
 - **SQL Server** through **Entity Framework Core** (EF Core)
 - **JWT bearer authentication**
+- A small **console client** that calls the API, so you can see the workflow end to end
 
 It is meant to be read and learned from. Every pattern here is one you can copy into a real project. This guide assumes
 you know some C# but have not built an API like this before.
@@ -43,6 +44,34 @@ The design is deliberately simple:
 - **Nothing about login is stored in the database.** There is no users table and no token table. The one allowed
   client id and secret live in configuration, and tokens are checked by their signature alone.
 
+### The big picture
+
+The solution has two programs. The **API** owns the data. The **Client** is a small console app that uses the API the
+way any outside program would, so you can watch the whole workflow from the caller's side.
+
+```
+  +------------------+     HTTP + JSON      +------------------+       SQL        +--------------+
+  |      Client      |  ----------------->  |       API        |  ------------->  |  SQL Server  |
+  |  (console app)   |  <-----------------  |  (ASP.NET Core)  |  <-------------  |              |
+  |   src/Client     |                      |     src/Api      |                  |  Categories  |
+  +------------------+                      +------------------+                  |  Products    |
+                                                                                  +--------------+
+   knows: client id,                         knows: client id,
+          client secret                             client secret,
+                                                    signing key
+```
+
+The workflow is always the same three moves:
+
+1. The client sends its **id and secret** to `/auth/login`.
+2. The API replies with a **token** that is valid for 60 minutes.
+3. The client sends that token in the **`Authorization` header** of every later request.
+
+Two things to notice in the picture:
+
+- **The client never talks to the database.** Only the API does.
+- **The client never sees the signing key.** It can read a token but cannot make or alter one.
+
 ---
 
 ## 2. Prerequisites
@@ -70,17 +99,23 @@ version for this folder only.
 dotnet tool restore
 ```
 
-**Step 2. Create the two secrets.** The API needs a key to sign tokens and a secret for the client that logs in.
-Neither is stored in the repo, so each developer creates their own. This script generates random values and saves them
-outside the project folder:
+**Step 2. Create the secrets.** There are two: a **signing key**, known only to the API, and a **client secret**, which
+the API and the client must both hold. Neither is stored in the repo, so each developer creates their own. This script
+generates random values and saves them outside the project folders:
 
 ```powershell
-foreach ($name in "Jwt:Key", "ApiClient:ClientSecret") {
+function New-RandomSecret {
     $bytes = New-Object byte[] 48
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    dotnet user-secrets set $name ([Convert]::ToBase64String($bytes)) --project src/Api
+    [Convert]::ToBase64String($bytes)
 }
+$clientSecret = New-RandomSecret
+dotnet user-secrets set "Jwt:Key" (New-RandomSecret) --project src/Api
+dotnet user-secrets set "ApiClient:ClientSecret" $clientSecret --project src/Api
+dotnet user-secrets set "Api:ClientSecret" $clientSecret --project src/Client
 ```
+
+Notice that the same client secret is given to both projects, while the signing key goes to the API only.
 
 You can look at them any time with:
 
@@ -108,6 +143,51 @@ Opening http://localhost:5106 in a browser should show `{"status":"ok"}`.
 ---
 
 ## 4. Try it out
+
+### Run the client (start here)
+
+Leave the API running, open a **second** terminal in the repository root, and run:
+
+```powershell
+dotnet run --project src/Client
+```
+
+The client walks through the whole workflow in eight steps and prints every request (`->`) and response (`<-`):
+
+```
+--- Step 1: Call a protected endpoint with no token ---
+  -> GET /products   (no Authorization header)
+  <- 401 Unauthorized   <- the API refuses: we have not proved who we are
+
+--- Step 2: Log in to get a token ---
+  -> POST /auth/login   { clientId: "demo-client", clientSecret: "********" }
+  <- 200 OK   token of 333 characters, valid until 14:02:06
+     The payload is only encoded, not encrypted. Anyone can read it:
+       {
+         "iss": "standard-minimal-webapi",
+         "sub": "demo-client",
+         ...
+       }
+
+--- Step 3: Call a protected endpoint with the token ---
+  -> GET /auth/me   Authorization: Bearer <token>
+  <- 200 OK   the API recognises us as "demo-client"
+```
+
+| Step | What it shows |
+|------|---------------|
+| 1 | A protected endpoint refuses a request with no token (401) |
+| 2 | Logging in, and what is inside the token |
+| 3 | The same kind of request succeeding once the token is attached |
+| 4 | Reading: list categories, list products, filter by category |
+| 5 | Creating a category and a product in it (201) |
+| 6 | Updating the product (200) |
+| 7 | What errors look like: validation (400), duplicate (409), not found (404) |
+| 8 | Deleting what it created (204), leaving the database as it found it |
+
+Read [src/Client/Program.cs](src/Client/Program.cs) alongside the output: each printed step is a few lines of code.
+
+### Other ways to call the API
 
 **From your editor.** Open [src/Api/Api.http](src/Api/Api.http), paste your client secret into the `@clientSecret`
 line at the top (do not commit that change), then click "Send request" above **Login** first and anything else after.
@@ -193,7 +273,12 @@ standard-minimal-webapi/
 ├── global.json                  pins the .NET SDK version
 ├── dotnet-tools.json            pins the EF Core command-line tool version
 ├── AGENTS.md, docs/agents/      settings for AI coding assistants; not part of the API
-└── src/Api/                     the one and only project
+├── src/Client/                  the console app that calls the API
+│   ├── Program.cs               the eight-step walkthrough
+│   ├── ApiClient.cs             one method per endpoint; handles login and the token
+│   ├── Models.cs                the JSON shapes, as C# records
+│   └── appsettings.json         the API's address and the client id
+└── src/Api/                     the API itself
     ├── Program.cs               START HERE: registers services and wires everything up
     ├── appsettings.json         non-secret settings (connection string, token lifetime)
     ├── Api.http                 sample requests you can run from your editor
@@ -223,6 +308,23 @@ standard-minimal-webapi/
 4. [Data/AppDbContext.cs](src/Api/Data/AppDbContext.cs) — how the tables are configured.
 5. [Auth/AuthEndpoints.cs](src/Api/Auth/AuthEndpoints.cs) and [Auth/TokenService.cs](src/Api/Auth/TokenService.cs) —
    the login logic.
+6. [Client/ApiClient.cs](src/Client/ApiClient.cs) — the same conversation from the caller's side.
+
+### How the client is built
+
+The client has three small files:
+
+- **[Models.cs](src/Client/Models.cs)** holds records matching the API's JSON. They are written again here instead of
+  being shared with the API project, because a real client is a separate program that knows the API only through its
+  JSON.
+- **[ApiClient.cs](src/Client/ApiClient.cs)** has one method per endpoint, such as `GetProductsAsync()` and
+  `CreateCategoryAsync(name)`. Every protected call goes through one private `SendAsync` method, which does three
+  things: logs in if there is no token or it is about to expire, adds the `Authorization: Bearer <token>` header, and
+  turns any error response into an `ApiException`.
+- **[Program.cs](src/Client/Program.cs)** is the walkthrough. It only calls `ApiClient` methods and prints.
+
+The idea worth copying is that **token handling lives in one place**. The rest of the program just calls
+`api.GetProductsAsync()` and never thinks about logging in.
 
 ### The pattern every feature follows
 
@@ -532,6 +634,14 @@ Settings are read from several places. Later ones override earlier ones:
 | `ApiClient:ClientId`        | `demo-client` | The id the caller logs in with |
 | `ApiClient:ClientSecret`    | none    | **Secret.** The caller's password; at least 16 characters |
 
+Those are the API's settings. The client has three of its own, in `src/Client`:
+
+| Setting            | Default | Purpose |
+|--------------------|---------|---------|
+| `Api:BaseUrl`      | `http://localhost:5106` | Where the API is |
+| `Api:ClientId`     | `demo-client` | Must match the API's `ApiClient:ClientId` |
+| `Api:ClientSecret` | none    | **Secret.** Must match the API's `ApiClient:ClientSecret` |
+
 **Rule: secrets never go in `appsettings.json`.** That file is in source control and visible to everyone with access to
 the repo.
 
@@ -590,6 +700,9 @@ To link the new table to another one, see how `Product.CategoryId` is done in
 | `Cannot open database "StandardMinimalWebApi"` or `Invalid object name 'Products'` | The database is missing or behind. Run `dotnet ef database update --project src/Api`. |
 | `A network-related or instance-specific error` when connecting | LocalDB is not installed or not started. Run `sqllocaldb start MSSQLLocalDB`, or point the connection string at another SQL Server. |
 | `dotnet ef` is not recognised | Run `dotnet tool restore` from the repository root. |
+| Client prints `Could not reach the API` | The API is not running. Start it in another terminal with `dotnet run --project src/Api --launch-profile http`. |
+| Client prints `The client secret is not set` | Run step 2 of [Run it for the first time](#3-run-it-for-the-first-time). |
+| Client prints `401 Invalid client id or secret` | The client's `Api:ClientSecret` differs from the API's `ApiClient:ClientSecret`. Run step 2 again to set both to the same value, then restart the API. |
 | `/auth/login` returns 401 | The client id or secret does not match configuration. Check them with `dotnet user-secrets list --project src/Api`. |
 | Every protected call returns 401 | The header must be exactly `Authorization: Bearer <access token>`. The token may also be over 60 minutes old; log in again. |
 | All tokens stopped working after a config change | `Jwt:Key`, `Jwt:Issuer` or `Jwt:Audience` changed. Old tokens no longer match. Log in again. |
@@ -611,27 +724,31 @@ The best way to learn this code is to change it. These go from easy to hard.
 3. Change one character in the middle of a token and send it. Explain the result using the checks listed in
    [section 8](#how-a-token-is-checked).
 4. Create, rename and delete a category through the API while watching the `Categories` table in a SQL tool.
+5. Run the client with the API's log level turned up (set `Microsoft.AspNetCore` to `Information` in
+   `src/Api/appsettings.Development.json`) and match each client step to the lines the API prints.
 
 **Small changes**
 
-5. Add a `Description` column to `Product` (optional, up to 1000 characters). You will touch the entity, the request
+6. Add a `Description` column to `Product` (optional, up to 1000 characters). You will touch the entity, the request
    and response records, the handlers, and add a migration.
-6. Add a rule that a product's price must be greater than zero, and check that the API returns 400 for `0`.
-7. Make `GET /categories` also return how many products each category has.
+7. Add a rule that a product's price must be greater than zero, and check that the API returns 400 for `0`.
+8. Make `GET /categories` also return how many products each category has.
 
 **New features**
 
-8. Add a `Suppliers` table with full CRUD by following
+9. Add a `Suppliers` table with full CRUD by following
    [section 12](#12-how-to-add-a-new-table-with-endpoints).
-9. Add paging to `GET /products` with `?page=1&pageSize=20`.
-10. Add a `GET /products/search?name=ham` endpoint that finds products whose name contains the text.
+10. Add paging to `GET /products` with `?page=1&pageSize=20`.
+11. Add a `GET /products/search?name=ham` endpoint that finds products whose name contains the text.
 
 **Harder**
 
-11. Allow more than one client: change `ApiClient` in configuration to a list, and accept any of them at login.
-12. Add a `scope` claim to the token (for example `read` or `read write`) and allow only `write` tokens to call the
+12. Allow more than one client: change `ApiClient` in configuration to a list, and accept any of them at login.
+13. Add a `scope` claim to the token (for example `read` or `read write`) and allow only `write` tokens to call the
     POST, PUT and DELETE endpoints.
-13. Add a test project and write a test that logs in and creates a product.
+14. Add a test project and write a test that logs in and creates a product.
+15. Add a `Suppliers` section to the client once exercise 9 is done: models, `ApiClient` methods and a walkthrough
+    step.
 
 ---
 
