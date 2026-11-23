@@ -3,6 +3,9 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+# Log files written by the API
+logs/
+
 # dotenv files
 .env
 

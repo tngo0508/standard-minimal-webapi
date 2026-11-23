@@ -283,7 +283,7 @@ standard-minimal-webapi/
 │   └── appsettings.json         the API's address and the client id
 └── src/Api/                     the API itself
     ├── Program.cs               START HERE: registers services and wires everything up
-    ├── appsettings.json         non-secret settings (connection string, token lifetime)
+    ├── appsettings.json         non-secret settings (connection string, token lifetime, log level)
     ├── Api.http                 sample requests you can run from your editor
     ├── Auth/
     │   ├── ApiClientOptions.cs  the allowed client id and secret, as a C# class
@@ -706,6 +706,8 @@ Settings are read from several places. Later ones override earlier ones:
 | `Jwt:Key`                   | none    | **Secret.** Signs tokens; at least 32 characters |
 | `ApiClient:ClientId`        | `demo-client` | The id the caller logs in with |
 | `ApiClient:ClientSecret`    | none    | **Secret.** The caller's password; at least 16 characters |
+| `Serilog:MinimumLevel:Default` | `Information` | How much detail to log. See [Reading the logs](#reading-the-logs) |
+| `Serilog:MinimumLevel:Override:Microsoft.AspNetCore` | `Warning` | Keeps the framework's own chatter out of the logs |
 
 Those are the API's settings. The client has three of its own, in `src/Client`:
 
@@ -783,6 +785,29 @@ To link the new table to another one, see how `Product.CategoryId` is done in
 | `address already in use` on start | Another copy of the API is still running. Stop it, or change the port in `src/Api/Properties/launchSettings.json`. |
 | Build error mentioning a package that needs `net11.0` | A package was upgraded past version 10. This project targets .NET 10, so keep `Microsoft.*` packages on `10.0.x`. |
 
+### Reading the logs
+
+The API logs with [Serilog](https://serilog.net). Every log line is written to two places:
+
+- **The console**, which is what you see when you run the API locally.
+- **A file**, `logs/api-<date>.log` in the folder the API runs from (`src/Api/logs` locally). On a server nobody is
+  watching the console, so this file is where to look when something goes wrong.
+
+A new file starts each day and the last 14 are kept. The `logs` folder is in `.gitignore`.
+
+What you will find in there:
+
+- One line per request, for example `HTTP GET /products responded 200 in 12.3 ms`.
+- Every unhandled error, marked `[ERR]`, with the full exception underneath. The caller only receives a short
+  `500` response; the detail is in the log.
+- Startup failures, such as a missing secret, logged as `Hosting failed to start`.
+
+The setup is a few lines at the top of [Program.cs](src/Api/Program.cs). How much detail is logged is set in the
+`Serilog` section of `appsettings.json`.
+
+On a server, the account the API runs under needs permission to write to the `logs` folder. If no file appears, check
+that first.
+
 ---
 
 ## 14. Practice exercises
@@ -797,8 +822,8 @@ The best way to learn this code is to change it. These go from easy to hard.
 3. Change one character in the middle of a token and send it. Explain the result using the checks listed in
    [section 8](#how-a-token-is-checked).
 4. Create, rename and delete a category through the API while watching the `Categories` table in a SQL tool.
-5. Run the client with the API's log level turned up (set `Microsoft.AspNetCore` to `Information` in
-   `src/Api/appsettings.Development.json`) and match each client step to the lines the API prints.
+5. Run the client with the API's log level turned up (set `Microsoft.AspNetCore` to `Information` under
+   `Serilog:MinimumLevel:Override` in `src/Api/appsettings.Development.json`) and match each client step to the lines the API prints.
 
 **Small changes**
 
@@ -838,4 +863,6 @@ To stay small, this reference does not include the following. A real project may
 - **Paging** on the plain list endpoints. `GET /products` and `GET /categories` return every row; only
   `GET /products/search` is paged.
 - **CORS settings**, needed if a browser app on another address calls this API.
-- **Structured logging, health checks and deployment setup.**
+- **Health checks and deployment setup.**
+- **Central log storage.** Logs go to a file on the server. A production system usually also sends them to a service
+  that can search across servers, and takes care never to log secrets or personal data.

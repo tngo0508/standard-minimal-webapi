@@ -6,8 +6,27 @@ using Api.Products;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// --- Logging --------------------------------------------------------------
+// Serilog replaces the built-in logger. Every log line goes to two places:
+// the console (handy when running locally) and a file (so errors can be read on a server,
+// where nobody is watching the console).
+// The "-" in the file name is where Serilog puts the date: logs/api-20261123.log.
+var logFilePath = Path.Combine(builder.Environment.ContentRootPath, "logs", "api-.log");
+
+builder.Services.AddSerilog(logger =>
+{
+    // How much detail to log comes from the "Serilog" section in appsettings.json.
+    logger.ReadFrom.Configuration(builder.Configuration);
+
+    logger.WriteTo.Console();
+
+    // Start a new file each day and keep the last 14, so the disk does not fill up.
+    logger.WriteTo.File(logFilePath, rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14);
+});
 
 // --- Database -------------------------------------------------------------
 // Only business data (Categories, Products) lives here. Nothing about users or tokens is stored.
@@ -72,6 +91,9 @@ var app = builder.Build();
 // The order of the next lines matters: each request passes through them top to bottom.
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+
+// Writes one log line per request: method, path, status code and how long it took.
+app.UseSerilogRequestLogging();
 
 if (app.Environment.IsDevelopment())
 {
