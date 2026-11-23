@@ -52,6 +52,18 @@ Authorization: Bearer {{login.response.body.$.accessToken}}
 GET {{baseUrl}}/products?categoryId=1
 Authorization: Bearer {{login.response.body.$.accessToken}}
 
+### Search products by name, one page at a time
+GET {{baseUrl}}/products/search?name=e&page=1&pageSize=2
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Search: the next page of the same search
+GET {{baseUrl}}/products/search?name=e&page=2&pageSize=2
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
+### Search: a page size over the limit gives 400
+GET {{baseUrl}}/products/search?pageSize=500
+Authorization: Bearer {{login.response.body.$.accessToken}}
+
 ### Get one product
 GET {{baseUrl}}/products/1
 Authorization: Bearer {{login.response.body.$.accessToken}}

@@ -79,6 +79,24 @@ try
     var productsInCategory = await api.GetProductsInCategoryAsync(firstCategory.Id);
     Got($"200 OK   {productsInCategory.Count} products in \"{firstCategory.Name}\"");
 
+    // Search with paging: ask for small pages and keep going until the last one.
+    var pageNumber = 1;
+    var lastPage = 1;
+    while (pageNumber <= lastPage)
+    {
+        Sent($"GET /products/search?name=e&page={pageNumber}&pageSize=2");
+        var result = await api.SearchProductsAsync("e", pageNumber, 2);
+        Got($"200 OK   page {result.Page} of {result.TotalPages}, {result.TotalCount} matches in total");
+        foreach (var p in result.Items)
+        {
+            Console.WriteLine($"         {p.Id,3}  {p.Name}");
+        }
+
+        // The first answer tells us how many pages there are.
+        lastPage = result.TotalPages;
+        pageNumber = pageNumber + 1;
+    }
+
     // ---- 5. Create ----------------------------------------------------------
     Step(5, "Create a category and a product in it");
     var newCategoryName = $"Demo {DateTime.Now:HHmmss}";

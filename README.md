@@ -182,7 +182,7 @@ The client walks through the whole workflow in eight steps and prints every requ
 | 1 | A protected endpoint refuses a request with no token (401) |
 | 2 | Logging in, and what is inside the token |
 | 3 | The same kind of request succeeding once the token is attached |
-| 4 | Reading: list categories, list products, filter by category |
+| 4 | Reading: list categories, list products, filter by category, search page by page |
 | 5 | Creating a category and a product in it (201) |
 | 6 | Updating the product (200) |
 | 7 | What errors look like: validation (400), duplicate (409), not found (404) |
@@ -600,6 +600,7 @@ A successful login returns:
 | Method | Path             | Body | Success | Failures |
 |--------|------------------|------|---------|----------|
 | GET    | `/products`      |      | 200 with a list. Add `?categoryId=1` to show one category only | |
+| GET    | `/products/search` |    | 200 with one page of matches. See [Searching with paging](#searching-with-paging) | 400 bad `page` or `pageSize` |
 | GET    | `/products/{id}` |      | 200     | 404 |
 | POST   | `/products`      | `name`, `price`, optional `categoryId` | 201 | 400 invalid input or unknown category |
 | PUT    | `/products/{id}` | `name`, `price`, optional `categoryId` | 200 | 400, 404 |
@@ -617,6 +618,60 @@ A product looks like this. `categoryId` and `categoryName` are `null` when the p
 }
 ```
 
+### Searching with paging
+
+`GET /products` returns every row, which is fine for a handful of products and a problem for a million.
+`GET /products/search` shows the usual answer: return the matches one **page** at a time.
+
+```
+GET /products/search?name=e&page=2&pageSize=2
+```
+
+Every part of the query string is optional:
+
+| Parameter    | Meaning | Default |
+|--------------|---------|---------|
+| `name`       | Only products whose name contains this text | all products |
+| `categoryId` | Only products in this category | all categories |
+| `page`       | Which page to return, counted from 1 | 1 |
+| `pageSize`   | How many products per page, from 1 to 100 | 20 |
+
+The response wraps the products in an object, so it can also say how many matches and pages there are:
+
+```json
+{
+  "items": [
+    { "id": 3, "name": "Garden hose", "price": 32.99, "categoryId": 2, "categoryName": "Garden" },
+    { "id": 4, "name": "Watering can", "price": 12.00, "categoryId": 2, "categoryName": "Garden" }
+  ],
+  "page": 2,
+  "pageSize": 2,
+  "totalCount": 5,
+  "totalPages": 3
+}
+```
+
+A caller keeps asking for `page + 1` until it reaches `totalPages`. A page past the end is not an error: it returns
+an empty `items` list.
+
+The handler in [ProductEndpoints.cs](src/Api/Products/ProductEndpoints.cs) does this in three moves:
+
+1. **Filter.** Add a `Where` for each search value that was given.
+2. **Count.** `CountAsync` asks the database how many rows match in total.
+3. **Take one page.** `OrderBy(...).Skip((page - 1) * pageSize).Take(pageSize)` loads only the rows of that page.
+
+The `OrderBy` matters. Without a fixed order the database may return rows in a different order on each request, and
+a row could then appear on two pages or on none.
+
+This style is called **offset paging**. It is the simplest kind and the right place to start. A production system
+with very large tables should know its two limits:
+
+- Skipping gets slower the further you go, because the database still has to walk past every skipped row.
+- If rows are added or deleted while a caller is paging, a row can be shown twice or missed.
+
+**Keyset paging** (also called cursor paging) avoids both by asking for "the next 20 rows after id 40" instead of
+"page 3". Searching with `LIKE '%text%'` also reads every row; large systems use a full-text index for that.
+
 Every protected endpoint also returns **401** when the token is missing, invalid or expired.
 
 ### Status codes used
@@ -626,7 +681,7 @@ Every protected endpoint also returns **401** when the token is missing, invalid
 | 200  | Success, with data |
 | 201  | Created; the `Location` header holds the new item's URL |
 | 204  | Success, nothing to return |
-| 400  | The request body broke a validation rule |
+| 400  | The request body or query string broke a validation rule |
 | 401  | No valid token, or wrong client id or secret |
 | 404  | No item with that id |
 | 409  | Conflicts with existing data, such as a duplicate name |
@@ -756,8 +811,9 @@ The best way to learn this code is to change it. These go from easy to hard.
 
 9. Add a `Suppliers` table with full CRUD by following
    [section 12](#12-how-to-add-a-new-table-with-endpoints).
-10. Add paging to `GET /products` with `?page=1&pageSize=20`.
-11. Add a `GET /products/search?name=ham` endpoint that finds products whose name contains the text.
+10. Add `minPrice` and `maxPrice` to `GET /products/search`.
+11. Add `GET /categories/search` with `name`, `page` and `pageSize`, following
+    [Searching with paging](#searching-with-paging).
 
 **Harder**
 
@@ -779,6 +835,7 @@ To stay small, this reference does not include the following. A real project may
 - **Refresh tokens and logout.** A token cannot be cancelled before it expires.
 - **Permissions.** Any valid token can do everything.
 - **Rate limiting** on `/auth/login`, to slow down secret guessing.
-- **Paging** on the list endpoints. They return every row.
+- **Paging** on the plain list endpoints. `GET /products` and `GET /categories` return every row; only
+  `GET /products/search` is paged.
 - **CORS settings**, needed if a browser app on another address calls this API.
 - **Structured logging, health checks and deployment setup.**

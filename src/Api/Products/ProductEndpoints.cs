@@ -13,14 +13,26 @@ public record ProductRequest(
 
 public record ProductResponse(int Id, string Name, decimal Price, int? CategoryId, string? CategoryName);
 
+/// <summary>One page of search results, plus the numbers a caller needs to ask for the other pages.</summary>
+public record ProductSearchResponse(
+    List<ProductResponse> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages);
+
 public static class ProductEndpoints
 {
+    // The largest page a caller may ask for from /products/search.
+    private const int MaxPageSize = 100;
+
     public static IEndpointRouteBuilder MapProductEndpoints(this IEndpointRouteBuilder app)
     {
         // Every endpoint in this group requires a valid bearer token.
         var group = app.MapGroup("/products").WithTags("Products").RequireAuthorization();
 
         group.MapGet("/", GetAll);
+        group.MapGet("/search", Search);
         group.MapGet("/{id:int}", GetById).WithName("GetProductById");
         group.MapPost("/", Create);
         group.MapPut("/{id:int}", Update);
@@ -44,6 +56,79 @@ public static class ProductEndpoints
         var products = await query.OrderBy(p => p.Id).ToListAsync(ct);
 
         var response = products.Select(ToResponse).ToList();
+        return TypedResults.Ok(response);
+    }
+
+    /// <summary>
+    /// Finds products one page at a time.
+    /// Example: /products/search?name=ham&amp;categoryId=1&amp;page=2&amp;pageSize=20
+    /// Every part of the query string is optional.
+    /// </summary>
+    private static async Task<Results<Ok<ProductSearchResponse>, ValidationProblem>> Search(
+        AppDbContext db,
+        CancellationToken ct,
+        string? name = null,
+        int? categoryId = null,
+        int page = 1,
+        int pageSize = 20)
+    {
+        // 1. Check the paging numbers. Pages are counted from 1, the way people count them.
+        var errors = new Dictionary<string, string[]>();
+
+        if (page < 1)
+        {
+            errors["page"] = ["page must be 1 or more."];
+        }
+
+        // The upper limit stops one request from asking for the whole table.
+        if (pageSize < 1 || pageSize > MaxPageSize)
+        {
+            errors["pageSize"] = [$"pageSize must be between 1 and {MaxPageSize}."];
+        }
+
+        if (errors.Count > 0)
+        {
+            return TypedResults.ValidationProblem(errors);
+        }
+
+        // 2. Build the filter. Nothing is sent to the database yet: each Where only adds to the query.
+        var query = db.Products.Include(p => p.Category).AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var text = name.Trim();
+
+            // Contains becomes SQL "LIKE '%text%'". With SQL Server's default settings it ignores case,
+            // so "ham" finds "Hammer".
+            query = query.Where(p => p.Name.Contains(text));
+        }
+
+        if (categoryId is not null)
+        {
+            query = query.Where(p => p.CategoryId == categoryId);
+        }
+
+        // 3. Count every match, so the caller knows how many pages there are.
+        var totalCount = await query.CountAsync(ct);
+
+        // 4. Load only the rows of the requested page.
+        //    Page 1 skips 0 rows, page 2 skips one page of rows, and so on.
+        //    OrderBy is required: without a fixed order, the database may return rows in a different
+        //    order each time, and a row could show up on two pages or on none.
+        var rowsToSkip = (page - 1) * pageSize;
+
+        var products = await query
+            .OrderBy(p => p.Id)
+            .Skip(rowsToSkip)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+        // 5. Work out the number of pages, rounding up: 43 matches at 20 per page is 3 pages.
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        var items = products.Select(ToResponse).ToList();
+        var response = new ProductSearchResponse(items, page, pageSize, totalCount, totalPages);
+
         return TypedResults.Ok(response);
     }
 

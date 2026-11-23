@@ -72,6 +72,17 @@ public class ApiClient(HttpClient http, string clientId, string clientSecret)
         return (await response.Content.ReadFromJsonAsync<List<Product>>())!;
     }
 
+    /// <summary>Finds products whose name contains the text, one page at a time.</summary>
+    public async Task<ProductSearchResult> SearchProductsAsync(string name, int page, int pageSize)
+    {
+        // EscapeDataString makes the text safe to put in a URL, for example a space becomes %20.
+        var encodedName = Uri.EscapeDataString(name);
+        var path = $"/products/search?name={encodedName}&page={page}&pageSize={pageSize}";
+
+        var response = await SendAsync(HttpMethod.Get, path);
+        return (await response.Content.ReadFromJsonAsync<ProductSearchResult>())!;
+    }
+
     public async Task<Product> GetProductAsync(int id)
     {
         var response = await SendAsync(HttpMethod.Get, $"/products/{id}");

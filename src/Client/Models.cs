@@ -20,5 +20,8 @@ public record ProductRequest(string Name, decimal Price, int? CategoryId = null)
 
 public record Product(int Id, string Name, decimal Price, int? CategoryId, string? CategoryName);
 
+/// <summary>One page of results from GET /products/search.</summary>
+public record ProductSearchResult(List<Product> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+
 /// <summary>The shape of every error the API returns (Problem Details).</summary>
 public record Problem(string? Title, int? Status, Dictionary<string, string[]>? Errors);
